@@ -38,22 +38,13 @@ function getInvoke(): Invoke | null {
     cachedInvoke = null;
     return null;
   }
-  const w = window as unknown as { __TAURI_INTERNALS__?: unknown };
-  if (!w.__TAURI_INTERNALS__) {
-    cachedInvoke = null;
-    return null;
-  }
-  // Lazy-load to avoid bundling errors in the pure-web preview.
-  try {
-    // @ts-expect-error — resolved at runtime inside Tauri.
-    return import(/* @vite-ignore */ "@tauri-apps/api/core").then((m) => {
-      cachedInvoke = m.invoke as Invoke;
-      return cachedInvoke;
-    }) as unknown as Invoke;
-  } catch {
-    cachedInvoke = null;
-    return null;
-  }
+  const w = window as unknown as { __TAURI_INTERNALS__?: { invoke?: Invoke } };
+  // Tauri v2 exposes `invoke` directly on the internals object at runtime.
+  // We read it dynamically to avoid a static import of `@tauri-apps/api`
+  // (which is only installed inside the Tauri build, not in Lovable's web preview).
+  const nativeInvoke = w.__TAURI_INTERNALS__?.invoke;
+  cachedInvoke = typeof nativeInvoke === "function" ? nativeInvoke : null;
+  return cachedInvoke;
 }
 
 async function call<T>(cmd: string, args?: Record<string, unknown>, fallback?: () => Promise<T>): Promise<T> {
