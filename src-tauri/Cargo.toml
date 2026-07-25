@@ -26,7 +26,17 @@ tokio = { version = "1", features = ["full"] }
 parking_lot = "0.12"
 anyhow = "1"
 
-# TODO(native): enable these for the real capture pipeline once implemented.
+# Windows-native capture/device APIs. We use the public Windows API directly
+# rather than importing Cap's AGPL application/orchestration code.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_HiDpi",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+# TODO(native): enable these for later Phase 1 milestones.
 # cpal = "0.15"
 # nokhwa = { version = "0.10", features = ["input-native"] }
 # ffmpeg-next = "7"
