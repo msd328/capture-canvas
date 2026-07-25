@@ -49,11 +49,7 @@ function getInvoke(): Invoke | null {
 
 async function call<T>(cmd: string, args?: Record<string, unknown>, fallback?: () => Promise<T>): Promise<T> {
   const invoke = getInvoke();
-  if (invoke) {
-    // The lazy import above may still be a promise on first call.
-    const resolved = (await Promise.resolve(invoke)) as Invoke;
-    return resolved<T>(cmd, args);
-  }
+  if (invoke) return invoke<T>(cmd, args);
   if (!fallback) {
     throw new Error(`Desktop command '${cmd}' is not available in web preview.`);
   }
