@@ -1,0 +1,58 @@
+import { Pause, Play, Square, Mic, MicOff, Camera, CameraOff } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { formatElapsed } from "@/hooks/useRecorder";
+import type { RecordingStatus } from "@/types/recorder";
+import { cn } from "@/lib/utils";
+
+interface Props {
+  status: RecordingStatus;
+  elapsedMs: number;
+  micOn: boolean;
+  cameraOn: boolean;
+  onPause: () => void;
+  onResume: () => void;
+  onStop: () => void;
+}
+
+export function FloatingControls({ status, elapsedMs, micOn, cameraOn, onPause, onResume, onStop }: Props) {
+  const paused = status === "paused";
+  return (
+    <div className="fixed bottom-6 left-1/2 z-40 -translate-x-1/2">
+      <div className="flex items-center gap-3 rounded-full border border-border-strong bg-surface/95 px-3 py-2 shadow-[var(--shadow-elevated)] backdrop-blur">
+        <div className="flex items-center gap-2 pl-2 pr-1">
+          <span className={cn("rec-dot", paused && "!animate-none opacity-50")} aria-hidden />
+          <span className="text-xs font-semibold uppercase tracking-wider text-record">
+            {paused ? "PAUSED" : "REC"}
+          </span>
+          <span className="ml-2 font-mono text-sm tabular-nums text-foreground">{formatElapsed(elapsedMs)}</span>
+        </div>
+
+        <div className="h-6 w-px bg-border" />
+
+        {paused ? (
+          <Button size="sm" variant="ghost" onClick={onResume} className="gap-1.5">
+            <Play className="size-4" /> Resume
+          </Button>
+        ) : (
+          <Button size="sm" variant="ghost" onClick={onPause} className="gap-1.5">
+            <Pause className="size-4" /> Pause
+          </Button>
+        )}
+
+        <Button size="sm" variant="destructive" onClick={onStop} className="gap-1.5 rounded-full">
+          <Square className="size-3.5 fill-current" /> Stop
+        </Button>
+
+        <div className="h-6 w-px bg-border" />
+
+        <div className="flex items-center gap-2 pl-1 pr-2 text-muted-foreground">
+          {micOn ? <Mic className="size-4" /> : <MicOff className="size-4 opacity-50" />}
+          {cameraOn ? <Camera className="size-4" /> : <CameraOff className="size-4 opacity-50" />}
+        </div>
+      </div>
+      <p className="mt-2 text-center text-[10px] uppercase tracking-widest text-muted-foreground/70">
+        Excluded from capture on supported OS
+      </p>
+    </div>
+  );
+}
