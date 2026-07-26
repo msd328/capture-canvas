@@ -1,6 +1,6 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
-import { ArrowLeft, FolderOpen, Pencil, Play, Trash2, Plus, Film } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowLeft, FolderOpen, Pencil, Trash2, Plus, Film } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import * as desktop from "@/services/desktop";
 import type { RecordingOutput } from "@/types/recorder";
@@ -27,6 +27,7 @@ function RecordingPreviewPage() {
   const [notFound, setNotFound] = useState(false);
   const [editing, setEditing] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const [videoError, setVideoError] = useState(false);
 
   useEffect(() => {
     desktop.getRecording(id).then((r) => {
@@ -38,6 +39,8 @@ function RecordingPreviewPage() {
       }
     });
   }, [id]);
+
+  const videoUrl = useMemo(() => (rec ? desktop.localFileUrl(rec.filePath) : null), [rec]);
 
   if (notFound) {
     return (
@@ -78,14 +81,27 @@ function RecordingPreviewPage() {
       </Link>
 
       <div className="surface-card overflow-hidden">
-        <div className="relative flex aspect-video items-center justify-center bg-[var(--gradient-surface)]">
-          {/* In Tauri: render a real <video src={convertFileSrc(rec.filePath)} controls />. */}
-          <div className="flex flex-col items-center gap-2 text-muted-foreground">
-            <div className="flex size-14 items-center justify-center rounded-full border border-border bg-surface shadow-[var(--shadow-soft)]">
-              <Play className="ml-0.5 size-6" />
+        <div className="relative flex aspect-video items-center justify-center bg-black">
+          {videoUrl && !videoError ? (
+            <video
+              className="h-full w-full object-contain"
+              src={videoUrl}
+              controls
+              playsInline
+              preload="metadata"
+              onError={() => setVideoError(true)}
+            />
+          ) : (
+            <div className="flex flex-col items-center gap-2 px-6 text-center text-muted-foreground">
+              <Film className="size-10 opacity-50" />
+              <p className="text-sm font-medium">Video file could not be opened</p>
+              <p className="max-w-lg text-xs">
+                {rec.fileSizeBytes === 0
+                  ? "This is an older placeholder recording created before the real MP4 pipeline was enabled. Create a new recording."
+                  : "The recording exists, but the desktop player could not load it. Use Open file location to inspect the MP4."}
+              </p>
             </div>
-            <p className="text-xs">Video preview (native player in desktop build)</p>
-          </div>
+          )}
         </div>
 
         <div className="border-t border-border p-6">
