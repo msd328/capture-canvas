@@ -19,10 +19,22 @@ pub struct LibraryStore {
 
 impl LibraryStore {
     fn new(path: PathBuf) -> Self {
-        Self {
-            recordings: RwLock::new(load_json(&path).unwrap_or_default()),
+        let mut recordings: Vec<RecordingOutput> = load_json(&path).unwrap_or_default();
+        // Do not keep dead cards forever when a user manually moves/deletes a
+        // recording outside the app or an older stub created a 0-byte entry.
+        recordings.retain(|recording| {
+            let media_path = Path::new(&recording.file_path);
+            media_path
+                .metadata()
+                .map(|metadata| metadata.is_file() && metadata.len() > 0)
+                .unwrap_or(false)
+        });
+        let store = Self {
+            recordings: RwLock::new(recordings),
             path,
-        }
+        };
+        let _ = store.persist();
+        store
     }
 
     pub fn persist(&self) -> Result<(), String> {
