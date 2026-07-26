@@ -34,6 +34,6 @@ pub fn resume_recording(state: State<'_, AppState>) -> Result<(), String> {
 pub fn stop_recording(state: State<'_, AppState>) -> Result<RecordingOutput, String> {
     let output = state.engine.stop().map_err(|e| e.to_string())?;
     state.library.recordings.write().insert(0, output.clone());
-    // TODO(native): persist the updated library to disk.
+    state.library.persist()?;
     Ok(output)
 }
