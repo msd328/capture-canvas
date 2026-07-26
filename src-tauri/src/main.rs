@@ -2,10 +2,6 @@
 //
 // This file wires up the Tauri app and registers every command consumed by
 // the React frontend (see src/services/desktop.ts for the contract).
-//
-// The real capture, encoding, and device enumeration live in the sibling
-// modules under this crate. Right now those are TODO stubs that return
-// deterministic sample data so the desktop shell can boot end-to-end.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -31,6 +27,8 @@ fn main() {
             commands::devices::list_windows,
             commands::devices::list_microphones,
             commands::devices::list_cameras,
+            commands::devices::get_camera_preview_frame,
+            commands::devices::system_audio_supported,
             commands::recording::start_recording,
             commands::recording::pause_recording,
             commands::recording::resume_recording,
