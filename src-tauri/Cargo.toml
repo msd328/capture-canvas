@@ -6,7 +6,6 @@ description = "Recorder — desktop screen recording (Phase 1)"
 
 # Lovable generated a binary-only Tauri scaffold with src/main.rs.
 # Keep this as a binary crate for now; a separate library target is unnecessary.
-
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -38,7 +37,7 @@ windows = { version = "0.61", features = [
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
 ] }
-
-# TODO(native): move microphone/system-audio capture to native PCM/WASAPI once
-# the Windows Graphics Capture pipeline replaces the FFmpeg proof-of-concept.
-# cpal = "0.15"
+# CPAL uses WASAPI on Windows. In addition to microphone/device work this lets
+# us detect the default render endpoint for native loopback capture, removing
+# the old requirement that users expose a Stereo Mix DirectShow device.
+cpal = "0.15"
