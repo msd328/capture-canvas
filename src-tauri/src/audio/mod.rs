@@ -1,10 +1,10 @@
 //! Audio capture helpers.
 //!
-//! Microphone enumeration uses Windows device APIs. The current FFmpeg-backed
-//! recorder opens those devices through DirectShow. Setup-screen metering uses
-//! one persistent WebView2/Web Audio stream instead of repeatedly spawning
-//! FFmpeg. System audio is enabled only when Windows exposes a loopback-style
-//! DirectShow endpoint such as Stereo Mix.
+//! Microphone enumeration uses Windows device APIs. The FFmpeg recording path
+//! currently opens microphones through DirectShow. Setup-screen metering uses
+//! one persistent WebView2/Web Audio stream. For system audio we detect the
+//! default Windows render endpoint through CPAL/WASAPI and retain the legacy
+//! DirectShow loopback resolver only as a compatibility recording fallback.
 
 use crate::recording::types::MicrophoneInfo;
 use std::process::Command;
@@ -12,6 +12,7 @@ use std::process::Command;
 #[cfg(windows)]
 mod windows_backend {
     use super::MicrophoneInfo;
+    use cpal::traits::{DeviceTrait, HostTrait};
     use windows::Devices::Enumeration::DeviceInformation;
     use windows::Media::Devices::{AudioDeviceRole, MediaDevice};
 
@@ -50,6 +51,16 @@ mod windows_backend {
             }
         }
         microphones
+    }
+
+    /// CPAL's default host is WASAPI on Windows. A usable default output device
+    /// means Windows exposes a render endpoint that a native loopback capturer
+    /// can open; unlike Stereo Mix this does not require a recording device.
+    pub fn system_audio_supported() -> bool {
+        let host = cpal::default_host();
+        host.default_output_device()
+            .and_then(|device| device.default_output_config().ok())
+            .is_some()
     }
 }
 
@@ -101,6 +112,9 @@ fn dshow_audio_names() -> Vec<String> {
     names
 }
 
+/// Legacy FFmpeg/DirectShow loopback source. This remains usable while the
+/// recording muxer is migrated to native WASAPI PCM, but it is no longer used
+/// to decide whether the UI exposes the System Audio control.
 pub fn resolve_system_audio_name() -> Option<String> {
     const LOOPBACK_HINTS: &[&str] = &[
         "stereo mix",
@@ -117,5 +131,8 @@ pub fn resolve_system_audio_name() -> Option<String> {
 }
 
 pub fn system_audio_supported() -> bool {
-    resolve_system_audio_name().is_some()
+    #[cfg(windows)]
+    { return windows_backend::system_audio_supported(); }
+    #[cfg(not(windows))]
+    { false }
 }
