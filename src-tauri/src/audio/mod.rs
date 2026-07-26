@@ -1,11 +1,12 @@
 //! Audio capture helpers.
 //!
 //! Microphone enumeration uses Windows device APIs. The current FFmpeg-backed
-//! recorder opens those devices through DirectShow. System audio is enabled only
-//! when Windows exposes a loopback-style DirectShow endpoint such as Stereo Mix.
+//! recorder opens those devices through DirectShow. Setup-screen metering uses
+//! one persistent WebView2/Web Audio stream instead of repeatedly spawning
+//! FFmpeg. System audio is enabled only when Windows exposes a loopback-style
+//! DirectShow endpoint such as Stereo Mix.
 
 use crate::recording::types::MicrophoneInfo;
-use anyhow::{anyhow, Context, Result};
 use std::process::Command;
 
 #[cfg(windows)]
@@ -117,47 +118,4 @@ pub fn resolve_system_audio_name() -> Option<String> {
 
 pub fn system_audio_supported() -> bool {
     resolve_system_audio_name().is_some()
-}
-
-/// Sample a short slice from the microphone and convert FFmpeg's measured
-/// mean-volume dB value into a normalized 0..1 meter value.
-pub fn microphone_level(id: &str) -> Result<f32> {
-    let name = resolve_microphone_name(id).ok_or_else(|| anyhow!("Selected microphone is no longer available"))?;
-    let input = format!("audio={name}");
-    let output = Command::new("ffmpeg")
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "info",
-            "-f",
-            "dshow",
-            "-i",
-            &input,
-            "-t",
-            "0.20",
-            "-af",
-            "volumedetect",
-            "-f",
-            "null",
-            "NUL",
-        ])
-        .output()
-        .context("Unable to sample microphone level")?;
-
-    let text = String::from_utf8_lossy(&output.stderr);
-    let db = text
-        .lines()
-        .find_map(|line| {
-            let marker = "mean_volume:";
-            let pos = line.find(marker)?;
-            let rest = line[pos + marker.len()..].trim();
-            if rest.starts_with("-inf") {
-                return Some(-90.0f32);
-            }
-            let value = rest.split_whitespace().next()?.parse::<f32>().ok()?;
-            Some(value)
-        })
-        .unwrap_or(-90.0);
-
-    Ok(10f32.powf(db / 20.0).clamp(0.0, 1.0))
 }
