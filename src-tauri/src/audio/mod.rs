@@ -1,20 +1,30 @@
 //! Audio capture helpers.
 //!
-//! Microphone enumeration uses Windows device APIs. The FFmpeg recording path
-//! currently opens microphones through DirectShow. Setup-screen metering uses
-//! one persistent WebView2/Web Audio stream. For system audio we detect the
-//! default Windows render endpoint through CPAL/WASAPI and retain the legacy
-//! DirectShow loopback resolver only as a compatibility recording fallback.
+//! Microphone enumeration uses Windows device APIs. Microphone recording still
+//! uses DirectShow in the current encoder process. Windows system audio is now
+//! captured natively from the default render endpoint through CPAL/WASAPI into
+//! a temporary floating-point WAV track, which the recording finalizer mixes
+//! into the MP4. This removes the old Stereo Mix / What U Hear requirement.
 
 use crate::recording::types::MicrophoneInfo;
-use std::process::Command;
+use anyhow::{anyhow, Context, Result};
+use std::path::Path;
 
 #[cfg(windows)]
 mod windows_backend {
-    use super::MicrophoneInfo;
-    use cpal::traits::{DeviceTrait, HostTrait};
+    use super::{MicrophoneInfo, Path, Result};
+    use anyhow::{anyhow, Context};
+    use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+    use cpal::{SampleFormat, Stream, StreamConfig};
+    use hound::{SampleFormat as WavSampleFormat, WavSpec, WavWriter};
+    use parking_lot::Mutex;
+    use std::fs::File;
+    use std::io::BufWriter;
+    use std::sync::Arc;
     use windows::Devices::Enumeration::DeviceInformation;
     use windows::Media::Devices::{AudioDeviceRole, MediaDevice};
+
+    type SharedWriter = Arc<Mutex<Option<WavWriter<BufWriter<File>>>>>;
 
     pub fn enumerate_microphones() -> Vec<MicrophoneInfo> {
         let selector = match MediaDevice::GetAudioCaptureSelector() {
@@ -53,14 +63,130 @@ mod windows_backend {
         microphones
     }
 
-    /// CPAL's default host is WASAPI on Windows. A usable default output device
-    /// means Windows exposes a render endpoint that a native loopback capturer
-    /// can open; unlike Stereo Mix this does not require a recording device.
     pub fn system_audio_supported() -> bool {
         let host = cpal::default_host();
         host.default_output_device()
             .and_then(|device| device.default_output_config().ok())
             .is_some()
+    }
+
+    /// A live WASAPI loopback stream and the WAV writer receiving its PCM.
+    /// The stream is deliberately kept alive for the whole recording segment.
+    pub struct SystemAudioCapture {
+        stream: Stream,
+        writer: SharedWriter,
+    }
+
+    // CPAL's Windows stream is owned and stopped exclusively by the recording
+    // engine thread/state. This mirrors the ownership model used by Cap's
+    // permissively licensed scap-cpal Windows capturer.
+    unsafe impl Send for SystemAudioCapture {}
+
+    impl SystemAudioCapture {
+        pub fn stop(self) -> Result<()> {
+            let Self { stream, writer } = self;
+            let _ = stream.pause();
+            drop(stream);
+            if let Some(writer) = writer.lock().take() {
+                writer.finalize().context("Unable to finalize system-audio WAV")?;
+            }
+            Ok(())
+        }
+    }
+
+    fn wav_spec(config: &StreamConfig) -> WavSpec {
+        WavSpec {
+            channels: config.channels,
+            sample_rate: config.sample_rate.0,
+            bits_per_sample: 32,
+            sample_format: WavSampleFormat::Float,
+        }
+    }
+
+    fn write_f32(writer: &SharedWriter, samples: impl IntoIterator<Item = f32>) {
+        let mut guard = writer.lock();
+        let Some(writer) = guard.as_mut() else { return; };
+        for sample in samples {
+            if writer.write_sample(sample.clamp(-1.0, 1.0)).is_err() {
+                break;
+            }
+        }
+    }
+
+    pub fn start_system_audio_capture(path: &Path) -> Result<SystemAudioCapture> {
+        let host = cpal::default_host();
+        let device = host
+            .default_output_device()
+            .ok_or_else(|| anyhow!("Windows has no default audio output device"))?;
+        let supported = device
+            .default_output_config()
+            .context("Unable to read the Windows default output format")?;
+        let sample_format = supported.sample_format();
+        let config: StreamConfig = supported.into();
+
+        let writer = WavWriter::create(path, wav_spec(&config))
+            .with_context(|| format!("Unable to create system-audio track {}", path.display()))?;
+        let writer: SharedWriter = Arc::new(Mutex::new(Some(writer)));
+        let error_callback = |error| eprintln!("WASAPI loopback stream error: {error}");
+
+        let stream = match sample_format {
+            SampleFormat::F32 => {
+                let sink = writer.clone();
+                device.build_input_stream(
+                    &config,
+                    move |data: &[f32], _| write_f32(&sink, data.iter().copied()),
+                    error_callback,
+                    None,
+                )
+            }
+            SampleFormat::I16 => {
+                let sink = writer.clone();
+                device.build_input_stream(
+                    &config,
+                    move |data: &[i16], _| {
+                        write_f32(&sink, data.iter().map(|&v| v as f32 / i16::MAX as f32))
+                    },
+                    error_callback,
+                    None,
+                )
+            }
+            SampleFormat::U16 => {
+                let sink = writer.clone();
+                device.build_input_stream(
+                    &config,
+                    move |data: &[u16], _| {
+                        write_f32(&sink, data.iter().map(|&v| (v as f32 / u16::MAX as f32) * 2.0 - 1.0))
+                    },
+                    error_callback,
+                    None,
+                )
+            }
+            SampleFormat::I32 => {
+                let sink = writer.clone();
+                device.build_input_stream(
+                    &config,
+                    move |data: &[i32], _| {
+                        write_f32(&sink, data.iter().map(|&v| v as f32 / i32::MAX as f32))
+                    },
+                    error_callback,
+                    None,
+                )
+            }
+            SampleFormat::F64 => {
+                let sink = writer.clone();
+                device.build_input_stream(
+                    &config,
+                    move |data: &[f64], _| write_f32(&sink, data.iter().map(|&v| v as f32)),
+                    error_callback,
+                    None,
+                )
+            }
+            other => return Err(anyhow!("Unsupported Windows loopback sample format: {other:?}")),
+        }
+        .context("Unable to create WASAPI loopback input stream")?;
+
+        stream.play().context("Unable to start WASAPI loopback capture")?;
+        Ok(SystemAudioCapture { stream, writer })
     }
 }
 
@@ -78,61 +204,25 @@ pub fn resolve_microphone_name(id: &str) -> Option<String> {
         .map(|device| device.name)
 }
 
-fn dshow_audio_names() -> Vec<String> {
-    let Ok(output) = Command::new("ffmpeg")
-        .args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"])
-        .output()
-    else {
-        return Vec::new();
-    };
-    let text = String::from_utf8_lossy(&output.stderr);
-    let mut in_audio = false;
-    let mut names = Vec::new();
-    for line in text.lines() {
-        if line.contains("DirectShow video devices") {
-            in_audio = false;
-            continue;
-        }
-        if line.contains("DirectShow audio devices") {
-            in_audio = true;
-            continue;
-        }
-        if !in_audio || line.contains("Alternative name") {
-            continue;
-        }
-        if let Some(start) = line.find('"') {
-            if let Some(end_rel) = line[start + 1..].find('"') {
-                let name = line[start + 1..start + 1 + end_rel].trim();
-                if !name.is_empty() && !names.iter().any(|n| n == name) {
-                    names.push(name.to_string());
-                }
-            }
-        }
-    }
-    names
-}
-
-/// Legacy FFmpeg/DirectShow loopback source. This remains usable while the
-/// recording muxer is migrated to native WASAPI PCM, but it is no longer used
-/// to decide whether the UI exposes the System Audio control.
-pub fn resolve_system_audio_name() -> Option<String> {
-    const LOOPBACK_HINTS: &[&str] = &[
-        "stereo mix",
-        "what u hear",
-        "what you hear",
-        "wave out mix",
-        "loopback",
-        "speaker mix",
-    ];
-    dshow_audio_names().into_iter().find(|name| {
-        let lower = name.to_lowercase();
-        LOOPBACK_HINTS.iter().any(|hint| lower.contains(hint))
-    })
-}
-
 pub fn system_audio_supported() -> bool {
     #[cfg(windows)]
     { return windows_backend::system_audio_supported(); }
     #[cfg(not(windows))]
     { false }
+}
+
+#[cfg(windows)]
+pub use windows_backend::SystemAudioCapture;
+
+#[cfg(windows)]
+pub fn start_system_audio_capture(path: &Path) -> Result<SystemAudioCapture> {
+    windows_backend::start_system_audio_capture(path)
+}
+
+#[cfg(not(windows))]
+pub struct SystemAudioCapture;
+
+#[cfg(not(windows))]
+pub fn start_system_audio_capture(_path: &Path) -> Result<SystemAudioCapture> {
+    Err(anyhow!("System audio capture is not implemented on this operating system"))
 }
