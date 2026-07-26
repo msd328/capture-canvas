@@ -18,7 +18,7 @@ export function SystemAudioToggle({ enabled, onEnabledChange, supported, platfor
     >
       {supported ? (
         <p className="text-xs text-muted-foreground">
-          Captures audio played by other apps on this Mac/PC and mixes it into the recording.
+          Windows audio output is available for native loopback capture. System audio will be mixed into the recording when the active recording backend can open that endpoint.
         </p>
       ) : (
         <div className="flex items-start gap-2 rounded-lg bg-muted p-3 text-xs text-muted-foreground">
