@@ -4,17 +4,6 @@
  * All native/desktop capability access goes through this module. Components
  * MUST NOT call `@tauri-apps/api` directly — they call the functions exported
  * here. This keeps the UI insulated from the transport.
- *
- * Runtime behavior:
- *   - When running inside Tauri (window.__TAURI_INTERNALS__ present), each
- *     function dispatches to a real Rust command via `invoke(...)`.
- *   - Otherwise (Lovable web preview, `vite dev` in a plain browser) the
- *     mock implementation in `./mock-desktop.ts` is used so the UI is
- *     fully explorable without the native backend.
- *
- * The Rust command names below are the contract the Tauri backend must
- * implement (see `src-tauri/src/commands/`). Do not rename without updating
- * both sides.
  */
 
 import type {
@@ -29,20 +18,21 @@ import type {
 import * as mock from "./mock-desktop";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
+type TauriInternals = {
+  invoke?: Invoke;
+  convertFileSrc?: (filePath: string, protocol?: string) => string;
+};
 
 let cachedInvoke: Invoke | null | undefined;
 
+function internals(): TauriInternals | undefined {
+  if (typeof window === "undefined") return undefined;
+  return (window as unknown as { __TAURI_INTERNALS__?: TauriInternals }).__TAURI_INTERNALS__;
+}
+
 function getInvoke(): Invoke | null {
   if (cachedInvoke !== undefined) return cachedInvoke;
-  if (typeof window === "undefined") {
-    cachedInvoke = null;
-    return null;
-  }
-  const w = window as unknown as { __TAURI_INTERNALS__?: { invoke?: Invoke } };
-  // Tauri v2 exposes `invoke` directly on the internals object at runtime.
-  // We read it dynamically to avoid a static import of `@tauri-apps/api`
-  // (which is only installed inside the Tauri build, not in Lovable's web preview).
-  const nativeInvoke = w.__TAURI_INTERNALS__?.invoke;
+  const nativeInvoke = internals()?.invoke;
   cachedInvoke = typeof nativeInvoke === "function" ? nativeInvoke : null;
   return cachedInvoke;
 }
@@ -57,6 +47,12 @@ async function call<T>(cmd: string, args?: Record<string, unknown>, fallback?: (
 }
 
 export const isDesktop = (): boolean => getInvoke() !== null;
+
+export function localFileUrl(filePath: string): string | null {
+  const convert = internals()?.convertFileSrc;
+  if (typeof convert !== "function") return null;
+  return convert(filePath, "asset");
+}
 
 // ---------- device enumeration ----------
 
@@ -111,14 +107,15 @@ export const getSettings = () =>
 export const updateSettings = (settings: RecorderSettings) =>
   call<RecorderSettings>("update_settings", { settings }, () => mock.updateSettings(settings));
 
-// ---------- live signals (mic level, camera preview) ----------
-// In Tauri these will be Rust events; in the web preview they are simulated.
+// ---------- live signals ----------
 
 export const subscribeMicLevel = (
   micId: string | null,
   cb: (level: number) => void,
 ): (() => void) => {
   if (!isDesktop()) return mock.subscribeMicLevel(micId, cb);
-  // TODO(native): subscribe to a Tauri event `mic-level` filtered by micId.
+  // Native live metering will be wired to the capture stream after the first
+  // real MP4 milestone. Keep the UI deterministic rather than faking levels.
+  cb(0);
   return () => undefined;
 };
