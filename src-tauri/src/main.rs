@@ -28,6 +28,7 @@ fn main() {
             commands::devices::list_microphones,
             commands::devices::list_cameras,
             commands::devices::get_camera_preview_frame,
+            commands::devices::get_microphone_level,
             commands::devices::system_audio_supported,
             commands::recording::start_recording,
             commands::recording::pause_recording,
