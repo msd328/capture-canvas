@@ -4,8 +4,6 @@ version = "0.1.0"
 edition = "2021"
 description = "Recorder — desktop screen recording (Phase 1)"
 
-# Lovable generated a binary-only Tauri scaffold with src/main.rs.
-# Keep this as a binary crate for now; a separate library target is unnecessary.
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -24,8 +22,6 @@ tokio = { version = "1", features = ["full"] }
 parking_lot = "0.12"
 anyhow = "1"
 
-# Windows-native capture/device APIs. We use public Windows APIs directly
-# rather than importing Cap's AGPL application/orchestration code.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
     "Devices_Enumeration",
@@ -37,7 +33,7 @@ windows = { version = "0.61", features = [
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
 ] }
-# CPAL uses WASAPI on Windows. In addition to microphone/device work this lets
-# us detect the default render endpoint for native loopback capture, removing
-# the old requirement that users expose a Stereo Mix DirectShow device.
+# CPAL uses WASAPI on Windows. We capture the default render endpoint through
+# its loopback-capable input stream and write a temporary PCM track per segment.
 cpal = "0.15"
+hound = "3.5"
