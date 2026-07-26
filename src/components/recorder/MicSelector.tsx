@@ -18,11 +18,19 @@ export function MicSelector({ enabled, onEnabledChange, micId, onMicChange, prev
   const [mics, setMics] = useState<MicrophoneInfo[]>([]);
 
   useEffect(() => {
+    let cancelled = false;
     desktop.listMicrophones().then((list) => {
+      if (cancelled) return;
       setMics(list);
       if (!micId && list.length) onMicChange(list.find((m) => m.isDefault)?.id ?? list[0].id);
     });
-  }, [micId, onMicChange]);
+    return () => {
+      cancelled = true;
+    };
+    // Enumerate once when the setup control mounts; changing selection should
+    // not trigger another Windows device scan.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <SectionShell
