@@ -9,11 +9,16 @@ use crate::recording::types::{DisplayInfo, WindowInfo};
 mod windows_backend {
     use super::DisplayInfo;
     use std::ffi::c_void;
-    use windows::Win32::Foundation::{BOOL, LPARAM, RECT};
+    use windows::core::BOOL;
+    use windows::Win32::Foundation::{LPARAM, RECT};
     use windows::Win32::Graphics::Gdi::{
         EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
-        MONITORINFOF_PRIMARY,
     };
+
+    // Win32 MONITORINFOF_PRIMARY is 0x00000001. Defining it locally avoids
+    // depending on a constant whose generated location changed between
+    // windows-rs versions.
+    const MONITORINFOF_PRIMARY: u32 = 0x00000001;
 
     unsafe extern "system" fn monitor_callback(
         monitor: HMONITOR,
@@ -21,13 +26,13 @@ mod windows_backend {
         _rect: *mut RECT,
         data: LPARAM,
     ) -> BOOL {
-        let displays = &mut *(data.0 as *mut Vec<DisplayInfo>);
+        let displays = unsafe { &mut *(data.0 as *mut Vec<DisplayInfo>) };
         let mut info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             ..Default::default()
         };
 
-        if GetMonitorInfoW(monitor, &mut info).as_bool() {
+        if unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
             let width = (info.rcMonitor.right - info.rcMonitor.left).max(0) as u32;
             let height = (info.rcMonitor.bottom - info.rcMonitor.top).max(0) as u32;
             let is_primary = (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
@@ -56,7 +61,7 @@ mod windows_backend {
 
         unsafe {
             let _ = EnumDisplayMonitors(
-                HDC::default(),
+                None,
                 None,
                 Some(monitor_callback),
                 LPARAM(ptr as isize),

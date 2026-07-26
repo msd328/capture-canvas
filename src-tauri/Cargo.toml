@@ -4,9 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "Recorder — desktop screen recording (Phase 1)"
 
-[lib]
-name = "recorder_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Lovable generated a binary-only Tauri scaffold with src/main.rs.
+# Keep this as a binary crate for now; a separate library target is unnecessary.
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
