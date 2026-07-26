@@ -68,6 +68,7 @@ function RecorderPage() {
   };
 
   const showFloating = recorder.status === "recording" || recorder.status === "paused" || recorder.status === "stopping";
+  const setupPreviewActive = recorder.status === "idle";
 
   return (
     <AppShell>
@@ -76,9 +77,7 @@ function RecorderPage() {
           <Sparkles className="size-3" /> Phase 1 · Local recording
         </div>
         <h1 className="mt-3 text-3xl font-semibold tracking-tight text-foreground">New recording</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Choose a source, set up your audio and camera, then press record.
-        </p>
+        <p className="mt-1 text-sm text-muted-foreground">Choose a source, set up your audio and camera, then press record.</p>
       </div>
 
       <section className="mb-6 surface-card p-6">
@@ -94,13 +93,19 @@ function RecorderPage() {
       </section>
 
       <div className="grid gap-4 md:grid-cols-2">
-        <MicSelector enabled={micOn} onEnabledChange={setMicOn} micId={micId} onMicChange={setMicId} />
+        <MicSelector
+          enabled={micOn}
+          onEnabledChange={setMicOn}
+          micId={micId}
+          onMicChange={setMicId}
+          previewActive={setupPreviewActive}
+        />
         <CameraSelector
           enabled={cameraOn}
           onEnabledChange={setCameraOn}
           cameraId={cameraId}
           onCameraChange={setCameraId}
-          previewActive={recorder.status === "idle"}
+          previewActive={setupPreviewActive}
         />
         <div className="md:col-span-2">
           <SystemAudioToggle
