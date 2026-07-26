@@ -24,7 +24,6 @@ chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["full"] }
 parking_lot = "0.12"
 anyhow = "1"
-base64 = "0.22"
 
 # Windows-native capture/device APIs. We use public Windows APIs directly
 # rather than importing Cap's AGPL application/orchestration code.
