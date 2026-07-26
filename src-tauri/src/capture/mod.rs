@@ -5,7 +5,7 @@
 //! the first working Windows milestone) so the frontend contract stays stable.
 
 use crate::recording::types::{CaptureKind, CaptureTarget, DisplayInfo, WindowInfo};
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 
 #[derive(Debug, Clone)]
 pub struct CaptureSource {
@@ -170,7 +170,7 @@ mod windows_backend {
                     .ok_or_else(|| anyhow!("Invalid window id"))?;
                 let value = usize::from_str_radix(raw, 16).map_err(|_| anyhow!("Invalid window id"))?;
                 let hwnd = HWND(value as *mut c_void);
-                if !unsafe { IsWindow(hwnd) }.as_bool() {
+                if !unsafe { IsWindow(Some(hwnd)) }.as_bool() {
                     return Err(anyhow!("Selected window is no longer available"));
                 }
                 let mut rect = RECT::default();
@@ -209,5 +209,5 @@ pub fn resolve_target(target: &CaptureTarget) -> Result<CaptureSource> {
     #[cfg(windows)]
     { return windows_backend::resolve_target(target); }
     #[cfg(not(windows))]
-    { let _ = target; Err(anyhow!("Native capture is not implemented for this operating system yet")) }
+    { let _ = target; Err(anyhow::anyhow!("Native capture is not implemented for this operating system yet")) }
 }
