@@ -11,9 +11,10 @@ interface Props {
   onEnabledChange: (v: boolean) => void;
   micId: string | null;
   onMicChange: (id: string | null) => void;
+  previewActive?: boolean;
 }
 
-export function MicSelector({ enabled, onEnabledChange, micId, onMicChange }: Props) {
+export function MicSelector({ enabled, onEnabledChange, micId, onMicChange, previewActive = true }: Props) {
   const [mics, setMics] = useState<MicrophoneInfo[]>([]);
 
   useEffect(() => {
@@ -37,13 +38,12 @@ export function MicSelector({ enabled, onEnabledChange, micId, onMicChange }: Pr
           <SelectContent>
             {mics.map((m) => (
               <SelectItem key={m.id} value={m.id}>
-                {m.name}
-                {m.isDefault ? " · Default" : ""}
+                {m.name}{m.isDefault ? " · Default" : ""}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
-        <LevelMeter active={enabled} micId={enabled ? micId : null} />
+        <LevelMeter active={enabled && previewActive} micId={enabled && previewActive ? micId : null} />
       </div>
     </SectionShell>
   );
