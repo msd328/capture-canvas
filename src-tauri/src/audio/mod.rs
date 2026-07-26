@@ -1,10 +1,14 @@
-//! Audio capture — microphone and (optionally) system audio.
+//! Audio capture helpers.
 //!
-//! Windows microphone enumeration is native. For the first working recording
-//! milestone, the selected microphone is passed to FFmpeg's DirectShow input.
-//! WASAPI loopback system-audio capture remains a separate backend milestone.
+//! Microphone enumeration continues to use the Windows device APIs because that
+//! path is already working reliably in the UI. For the current FFmpeg-backed
+//! recording milestone, system audio is enabled only when Windows exposes a
+//! DirectShow loopback-style device (for example Stereo Mix / What U Hear).
+//! If no such device exists, the UI reports system audio as unavailable instead
+//! of silently producing a recording with no desktop audio.
 
 use crate::recording::types::MicrophoneInfo;
+use std::process::Command;
 
 #[cfg(windows)]
 mod windows_backend {
@@ -64,9 +68,57 @@ pub fn resolve_microphone_name(id: &str) -> Option<String> {
         .map(|device| device.name)
 }
 
-/// Device enumeration is available, but true system-output capture is not yet
-/// wired to the encoder. Returning false prevents the UI/engine from pretending
-/// that the feature is recording audio when it is not.
+fn dshow_audio_names() -> Vec<String> {
+    let Ok(output) = Command::new("ffmpeg")
+        .args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&output.stderr);
+    let mut in_audio = false;
+    let mut names = Vec::new();
+    for line in text.lines() {
+        if line.contains("DirectShow video devices") {
+            in_audio = false;
+            continue;
+        }
+        if line.contains("DirectShow audio devices") {
+            in_audio = true;
+            continue;
+        }
+        if !in_audio || line.contains("Alternative name") {
+            continue;
+        }
+        if let Some(start) = line.find('"') {
+            if let Some(end_rel) = line[start + 1..].find('"') {
+                let name = line[start + 1..start + 1 + end_rel].trim();
+                if !name.is_empty() && !names.iter().any(|n| n == name) {
+                    names.push(name.to_string());
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Find a DirectShow endpoint that represents playback/loopback audio.
+/// Common driver names include Stereo Mix, What U Hear and Wave Out Mix.
+pub fn resolve_system_audio_name() -> Option<String> {
+    const LOOPBACK_HINTS: &[&str] = &[
+        "stereo mix",
+        "what u hear",
+        "what you hear",
+        "wave out mix",
+        "loopback",
+        "speaker mix",
+    ];
+    dshow_audio_names().into_iter().find(|name| {
+        let lower = name.to_lowercase();
+        LOOPBACK_HINTS.iter().any(|hint| lower.contains(hint))
+    })
+}
+
 pub fn system_audio_supported() -> bool {
-    false
+    resolve_system_audio_name().is_some()
 }
