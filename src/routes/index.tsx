@@ -27,17 +27,11 @@ export const Route = createFileRoute("/")({
   component: RecorderPage,
 });
 
-// Platform detection stub. In Tauri this will be replaced with an OS query.
 function detectSystemAudioSupport(): { supported: boolean; note: string } {
-  if (typeof navigator === "undefined") return { supported: false, note: "" };
-  const ua = navigator.userAgent.toLowerCase();
-  if (ua.includes("mac")) {
-    return {
-      supported: false,
-      note: "System audio on macOS requires an audio helper (e.g. a virtual audio driver). This will be enabled in a later phase.",
-    };
-  }
-  return { supported: true, note: "" };
+  return {
+    supported: false,
+    note: "System audio is being implemented with Windows WASAPI loopback. This build records screen/window video, microphone, and optional camera; the toggle stays disabled so it cannot silently produce a recording without system sound.",
+  };
 }
 
 function RecorderPage() {
