@@ -1,13 +1,25 @@
 //! Screen and window capture.
 //!
-//! Windows Phase 1 starts with real source enumeration through Win32.
-//! Actual frame capture will be added behind this module next.
+//! Windows Phase 1 uses Win32 for source enumeration and target resolution.
+//! Frame capture itself is driven by the recording backend (FFmpeg/gdigrab for
+//! the first working Windows milestone) so the frontend contract stays stable.
 
-use crate::recording::types::{DisplayInfo, WindowInfo};
+use crate::recording::types::{CaptureKind, CaptureTarget, DisplayInfo, WindowInfo};
+use anyhow::{anyhow, Result};
+
+#[derive(Debug, Clone)]
+pub struct CaptureSource {
+    pub ffmpeg_input: String,
+    pub offset_x: Option<i32>,
+    pub offset_y: Option<i32>,
+    pub width: u32,
+    pub height: u32,
+}
 
 #[cfg(windows)]
 mod windows_backend {
-    use super::{DisplayInfo, WindowInfo};
+    use super::{CaptureKind, CaptureSource, CaptureTarget, DisplayInfo, WindowInfo};
+    use anyhow::{anyhow, Result};
     use std::ffi::c_void;
     use windows::core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM, RECT};
@@ -15,88 +27,77 @@ mod windows_backend {
         EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        EnumWindows, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsWindowVisible,
+        EnumWindows, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsWindow, IsWindowVisible,
     };
 
-    // Win32 MONITORINFOF_PRIMARY is 0x00000001. Defining it locally avoids
-    // depending on a constant whose generated location changed between
-    // windows-rs versions.
     const MONITORINFOF_PRIMARY: u32 = 0x00000001;
 
-    unsafe extern "system" fn monitor_callback(
+    #[derive(Debug, Clone)]
+    struct MonitorNative {
+        handle: usize,
+        rect: RECT,
+        is_primary: bool,
+    }
+
+    unsafe extern "system" fn monitor_native_callback(
         monitor: HMONITOR,
         _hdc: HDC,
         _rect: *mut RECT,
         data: LPARAM,
     ) -> BOOL {
-        let displays = unsafe { &mut *(data.0 as *mut Vec<DisplayInfo>) };
+        let monitors = unsafe { &mut *(data.0 as *mut Vec<MonitorNative>) };
         let mut info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             ..Default::default()
         };
-
         if unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
-            let width = (info.rcMonitor.right - info.rcMonitor.left).max(0) as u32;
-            let height = (info.rcMonitor.bottom - info.rcMonitor.top).max(0) as u32;
-            let is_primary = (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
-            let index = displays.len() + 1;
-
-            displays.push(DisplayInfo {
-                id: format!("monitor-{:x}", monitor.0 as usize),
-                name: if is_primary {
-                    format!("Display {index} (Primary)")
-                } else {
-                    format!("Display {index}")
-                },
-                width,
-                height,
-                is_primary,
-                thumbnail_data_url: None,
+            monitors.push(MonitorNative {
+                handle: monitor.0 as usize,
+                rect: info.rcMonitor,
+                is_primary: (info.dwFlags & MONITORINFOF_PRIMARY) != 0,
             });
         }
-
         BOOL(1)
+    }
+
+    fn native_monitors() -> Vec<MonitorNative> {
+        let mut monitors = Vec::<MonitorNative>::new();
+        let ptr = &mut monitors as *mut Vec<MonitorNative> as *mut c_void;
+        unsafe {
+            let _ = EnumDisplayMonitors(None, None, Some(monitor_native_callback), LPARAM(ptr as isize));
+        }
+        monitors.sort_by_key(|monitor| !monitor.is_primary);
+        monitors
     }
 
     unsafe extern "system" fn window_callback(hwnd: HWND, data: LPARAM) -> BOOL {
         if !unsafe { IsWindowVisible(hwnd) }.as_bool() {
             return BOOL(1);
         }
-
         let title_len = unsafe { GetWindowTextLengthW(hwnd) };
         if title_len <= 0 {
             return BOOL(1);
         }
-
         let mut title_buffer = vec![0u16; title_len as usize + 1];
         let copied = unsafe { GetWindowTextW(hwnd, &mut title_buffer) };
         if copied <= 0 {
             return BOOL(1);
         }
-
-        let title = String::from_utf16_lossy(&title_buffer[..copied as usize])
-            .trim()
-            .to_string();
+        let title = String::from_utf16_lossy(&title_buffer[..copied as usize]).trim().to_string();
         if title.is_empty() || title == "Recorder" || title == "Program Manager" {
             return BOOL(1);
         }
-
         let mut rect = RECT::default();
         if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
             return BOOL(1);
         }
-
         let width = (rect.right - rect.left).max(0) as u32;
         let height = (rect.bottom - rect.top).max(0) as u32;
-        // Filter tiny utility/tool windows that are not useful recording targets.
         if width < 100 || height < 100 {
             return BOOL(1);
         }
-
         let windows = unsafe { &mut *(data.0 as *mut Vec<WindowInfo>) };
         windows.push(WindowInfo {
-            // Keep the native HWND in the id so the upcoming capture pipeline can
-            // resolve this exact window without changing the frontend contract.
             id: format!("window-{:x}", hwnd.0 as usize),
             name: title,
             app_name: "Windows app".to_string(),
@@ -104,60 +105,109 @@ mod windows_backend {
             height,
             thumbnail_data_url: None,
         });
-
         BOOL(1)
     }
 
     pub fn enumerate_displays() -> Vec<DisplayInfo> {
-        let mut displays = Vec::<DisplayInfo>::new();
-        let ptr = &mut displays as *mut Vec<DisplayInfo> as *mut c_void;
-
-        unsafe {
-            let _ = EnumDisplayMonitors(
-                None,
-                None,
-                Some(monitor_callback),
-                LPARAM(ptr as isize),
-            );
-        }
-
-        displays.sort_by_key(|display| !display.is_primary);
-        displays
+        native_monitors()
+            .into_iter()
+            .enumerate()
+            .map(|(idx, monitor)| {
+                let width = (monitor.rect.right - monitor.rect.left).max(0) as u32;
+                let height = (monitor.rect.bottom - monitor.rect.top).max(0) as u32;
+                DisplayInfo {
+                    id: format!("monitor-{:x}", monitor.handle),
+                    name: if monitor.is_primary {
+                        format!("Display {} (Primary)", idx + 1)
+                    } else {
+                        format!("Display {}", idx + 1)
+                    },
+                    width,
+                    height,
+                    is_primary: monitor.is_primary,
+                    thumbnail_data_url: None,
+                }
+            })
+            .collect()
     }
 
     pub fn enumerate_windows() -> Vec<WindowInfo> {
         let mut windows = Vec::<WindowInfo>::new();
         let ptr = &mut windows as *mut Vec<WindowInfo> as *mut c_void;
-
         unsafe {
             let _ = EnumWindows(Some(window_callback), LPARAM(ptr as isize));
         }
-
         windows.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         windows
+    }
+
+    pub fn resolve_target(target: &CaptureTarget) -> Result<CaptureSource> {
+        match target.kind {
+            CaptureKind::Display => {
+                let raw = target
+                    .id
+                    .strip_prefix("monitor-")
+                    .ok_or_else(|| anyhow!("Invalid monitor id"))?;
+                let handle = usize::from_str_radix(raw, 16).map_err(|_| anyhow!("Invalid monitor id"))?;
+                let monitor = native_monitors()
+                    .into_iter()
+                    .find(|monitor| monitor.handle == handle)
+                    .ok_or_else(|| anyhow!("Selected display is no longer available"))?;
+                let width = (monitor.rect.right - monitor.rect.left).max(0) as u32;
+                let height = (monitor.rect.bottom - monitor.rect.top).max(0) as u32;
+                Ok(CaptureSource {
+                    ffmpeg_input: "desktop".to_string(),
+                    offset_x: Some(monitor.rect.left),
+                    offset_y: Some(monitor.rect.top),
+                    width,
+                    height,
+                })
+            }
+            CaptureKind::Window => {
+                let raw = target
+                    .id
+                    .strip_prefix("window-")
+                    .ok_or_else(|| anyhow!("Invalid window id"))?;
+                let value = usize::from_str_radix(raw, 16).map_err(|_| anyhow!("Invalid window id"))?;
+                let hwnd = HWND(value as *mut c_void);
+                if !unsafe { IsWindow(hwnd) }.as_bool() {
+                    return Err(anyhow!("Selected window is no longer available"));
+                }
+                let mut rect = RECT::default();
+                unsafe { GetWindowRect(hwnd, &mut rect) }
+                    .map_err(|_| anyhow!("Unable to read selected window bounds"))?;
+                let width = (rect.right - rect.left).max(0) as u32;
+                let height = (rect.bottom - rect.top).max(0) as u32;
+                Ok(CaptureSource {
+                    // gdigrab accepts a native HWND in decimal form.
+                    ffmpeg_input: format!("hwnd={value}"),
+                    offset_x: None,
+                    offset_y: None,
+                    width,
+                    height,
+                })
+            }
+        }
     }
 }
 
 pub fn enumerate_displays() -> Vec<DisplayInfo> {
     #[cfg(windows)]
-    {
-        return windows_backend::enumerate_displays();
-    }
-
+    { return windows_backend::enumerate_displays(); }
     #[cfg(not(windows))]
-    {
-        Vec::new()
-    }
+    { Vec::new() }
 }
 
 pub fn enumerate_windows() -> Vec<WindowInfo> {
     #[cfg(windows)]
-    {
-        return windows_backend::enumerate_windows();
-    }
-
+    { return windows_backend::enumerate_windows(); }
     #[cfg(not(windows))]
-    {
-        Vec::new()
-    }
+    { Vec::new() }
+}
+
+pub fn resolve_target(target: &CaptureTarget) -> Result<CaptureSource> {
+    #[cfg(windows)]
+    { return windows_backend::resolve_target(target); }
+    #[cfg(not(windows))]
+    { let _ = target; Err(anyhow!("Native capture is not implemented for this operating system yet")) }
 }
