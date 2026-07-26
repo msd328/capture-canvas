@@ -1,10 +1,9 @@
 //! Recording engine surface.
 //!
-//! The first real Windows pipeline deliberately keeps the existing frontend
-//! contract: a selected display/window is captured with FFmpeg's gdigrab input,
-//! optional microphone/camera devices are opened through DirectShow, and the
-//! result is encoded to H.264/AAC MP4. Pause/resume is implemented as segments
-//! that are concatenated losslessly when the recording stops.
+//! The current Windows milestone captures a selected display/window with
+//! FFmpeg gdigrab, optional microphone/system-audio through DirectShow, and an
+//! optional DirectShow camera overlay. Pause/resume uses independently encoded
+//! segments which are concatenated losslessly on stop.
 
 pub mod types;
 
@@ -51,12 +50,12 @@ impl RecordingEngine {
         if guard.is_some() {
             return Err(anyhow!("A recording is already in progress"));
         }
-        if config.system_audio {
+        ensure_ffmpeg_available()?;
+        if config.system_audio && audio::resolve_system_audio_name().is_none() {
             return Err(anyhow!(
-                "System audio capture is not enabled yet. Turn System Audio off for this build."
+                "System audio is enabled, but Windows is not exposing a loopback capture device (such as Stereo Mix / What U Hear). Disable System Audio or enable a loopback device in Windows sound settings."
             ));
         }
-        ensure_ffmpeg_available()?;
 
         let id = Uuid::new_v4().to_string();
         let source = capture::resolve_target(&config.target)?;
@@ -252,6 +251,17 @@ fn spawn_segment(
         None
     };
 
+    let system_input = if config.system_audio {
+        let name = audio::resolve_system_audio_name()
+            .ok_or_else(|| anyhow!("Windows system-audio loopback device is unavailable"))?;
+        cmd.args(["-thread_queue_size", "1024", "-f", "dshow", "-i", &format!("audio={name}")]);
+        let index = next_input;
+        next_input += 1;
+        Some(index)
+    } else {
+        None
+    };
+
     let camera_input = if let Some(id) = config.camera_id.as_deref() {
         let name = camera::resolve_camera_name(id)
             .ok_or_else(|| anyhow!("The selected camera is no longer available"))?;
@@ -262,20 +272,34 @@ fn spawn_segment(
         None
     };
 
+    let mut filter_parts = Vec::<String>::new();
     if let Some(index) = camera_input {
-        let filter = format!(
+        filter_parts.push(format!(
             "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2[base];[{index}:v]scale=320:-2[cam];[base][cam]overlay=W-w-24:H-h-24[v]"
-        );
-        cmd.args(["-filter_complex", &filter, "-map", "[v]"]);
+        ));
+    }
+    if let (Some(mic), Some(system)) = (mic_input, system_input) {
+        filter_parts.push(format!(
+            "[{mic}:a][{system}:a]aresample=async=1:first_pts=0,amix=inputs=2:duration=longest:dropout_transition=2[a]"
+        ));
+    }
+
+    if !filter_parts.is_empty() {
+        cmd.args(["-filter_complex", &filter_parts.join(";")]);
+    }
+
+    if camera_input.is_some() {
+        cmd.args(["-map", "[v]"]);
     } else {
         cmd.args(["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-map", "0:v:0"]);
     }
 
-    if let Some(index) = mic_input {
-        cmd.args(["-map", &format!("{index}:a:0")]);
-    } else {
-        cmd.arg("-an");
-    }
+    match (mic_input, system_input) {
+        (Some(_), Some(_)) => cmd.args(["-map", "[a]"]),
+        (Some(index), None) => cmd.args(["-map", &format!("{index}:a:0")]),
+        (None, Some(index)) => cmd.args(["-map", &format!("{index}:a:0")]),
+        (None, None) => cmd.arg("-an"),
+    };
 
     let encoder = choose_h264_encoder();
     cmd.args(["-c:v", encoder, "-pix_fmt", "yuv420p"]);
@@ -284,7 +308,7 @@ fn spawn_segment(
     } else {
         cmd.args(["-b:v", "6000k"]);
     }
-    if mic_input.is_some() {
+    if mic_input.is_some() || system_input.is_some() {
         cmd.args(["-c:a", "aac", "-b:a", "160k"]);
     }
     cmd.args(["-r", &fps, "-movflags", "+faststart"]);
@@ -294,7 +318,7 @@ fn spawn_segment(
         .stderr(Stdio::inherit());
 
     let mut child = cmd.spawn().context("Unable to start FFmpeg recording process")?;
-    thread::sleep(Duration::from_millis(450));
+    thread::sleep(Duration::from_millis(650));
     if let Some(status) = child.try_wait().context("Unable to inspect FFmpeg process")? {
         return Err(anyhow!(
             "FFmpeg stopped while starting the recording (exit code {}). Check the terminal output above for the device/capture error.",
