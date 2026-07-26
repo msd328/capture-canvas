@@ -48,9 +48,7 @@ export const listDisplays = () => call<DisplayInfo[]>("list_displays", undefined
 export const listWindows = () => call<WindowInfo[]>("list_windows", undefined, () => mock.listWindows());
 export const listMicrophones = () => call<MicrophoneInfo[]>("list_microphones", undefined, () => mock.listMicrophones());
 export const listCameras = () => call<CameraInfo[]>("list_cameras", undefined, () => mock.listCameras());
-export const getCameraPreviewFrame = (cameraId: string) => call<string>("get_camera_preview_frame", { cameraId });
-export const getMicrophoneLevel = (microphoneId: string) => call<number>("get_microphone_level", { microphoneId });
-export const getSystemAudioSupported = () => call<boolean>("system_audio_supported", undefined, async () => true);
+export const getSystemAudioSupported = () => call<boolean>("system_audio_supported", undefined, async () => false);
 
 export const startRecording = (config: RecordingConfig) =>
   call<{ id: string }>("start_recording", { config }, () => mock.startRecording(config));
@@ -69,29 +67,3 @@ export const openRecordingLocation = (id: string) =>
 export const getSettings = () => call<RecorderSettings>("get_settings", undefined, () => mock.getSettings());
 export const updateSettings = (settings: RecorderSettings) =>
   call<RecorderSettings>("update_settings", { settings }, () => mock.updateSettings(settings));
-
-export const subscribeMicLevel = (
-  micId: string | null,
-  cb: (level: number) => void,
-): (() => void) => {
-  if (!isDesktop()) return mock.subscribeMicLevel(micId, cb);
-  if (!micId) return () => undefined;
-
-  let cancelled = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const sample = async () => {
-    try {
-      const level = await getMicrophoneLevel(micId);
-      if (!cancelled) cb(level);
-    } catch {
-      if (!cancelled) cb(0);
-    }
-    if (!cancelled) timer = setTimeout(sample, 500);
-  };
-  sample();
-
-  return () => {
-    cancelled = true;
-    if (timer) clearTimeout(timer);
-  };
-};
