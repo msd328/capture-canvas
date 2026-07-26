@@ -1,12 +1,11 @@
 //! Webcam enumeration and recording helpers.
 //!
 //! On Windows we prefer the exact DirectShow device names reported by FFmpeg,
-//! because those are the names the recording process can actually open. This
-//! avoids the previous mismatch between Windows MediaDevice ids and DirectShow.
+//! because those are the names the recording process can actually open. The
+//! setup-screen preview is intentionally handled by one persistent WebView2
+//! media stream so it does not spawn FFmpeg processes while the UI is idle.
 
 use crate::recording::types::CameraInfo;
-use anyhow::{anyhow, Context, Result};
-use base64::Engine;
 use std::process::Command;
 
 fn parse_dshow_device_names(section_name: &str) -> Vec<String> {
@@ -67,45 +66,4 @@ pub fn resolve_camera_name(id: &str) -> Option<String> {
         .into_iter()
         .find(|device| device.id == id)
         .map(|device| device.name)
-}
-
-/// Capture one real JPEG frame from the selected DirectShow camera.
-/// The frontend polls this only while the setup screen is idle; recording stops
-/// polling before FFmpeg opens the camera for the actual recording session.
-pub fn preview_frame_data_url(id: &str) -> Result<String> {
-    let name = resolve_camera_name(id).ok_or_else(|| anyhow!("Selected camera is no longer available"))?;
-    let input = format!("video={name}");
-    let output = Command::new("ffmpeg")
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "dshow",
-            "-i",
-            &input,
-            "-frames:v",
-            "1",
-            "-vf",
-            "scale=320:-2",
-            "-f",
-            "image2pipe",
-            "-vcodec",
-            "mjpeg",
-            "pipe:1",
-        ])
-        .output()
-        .context("Unable to start camera preview")?;
-
-    if !output.status.success() || output.stdout.is_empty() {
-        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(anyhow!(if detail.is_empty() {
-            "The selected camera could not provide a preview frame".to_string()
-        } else {
-            format!("Camera preview failed: {detail}")
-        }));
-    }
-
-    let encoded = base64::engine::general_purpose::STANDARD.encode(output.stdout);
-    Ok(format!("data:image/jpeg;base64,{encoded}"))
 }
