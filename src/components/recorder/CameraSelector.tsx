@@ -11,10 +11,19 @@ interface Props {
   onEnabledChange: (v: boolean) => void;
   cameraId: string | null;
   onCameraChange: (id: string | null) => void;
+  previewActive?: boolean;
 }
 
-export function CameraSelector({ enabled, onEnabledChange, cameraId, onCameraChange }: Props) {
+export function CameraSelector({
+  enabled,
+  onEnabledChange,
+  cameraId,
+  onCameraChange,
+  previewActive = true,
+}: Props) {
   const [cameras, setCameras] = useState<CameraInfo[]>([]);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
 
   useEffect(() => {
     desktop.listCameras().then((list) => {
@@ -22,6 +31,36 @@ export function CameraSelector({ enabled, onEnabledChange, cameraId, onCameraCha
       if (!cameraId && list.length) onCameraChange(list.find((c) => c.isDefault)?.id ?? list[0].id);
     });
   }, [cameraId, onCameraChange]);
+
+  useEffect(() => {
+    if (!enabled || !cameraId || !previewActive || !desktop.isDesktop()) {
+      setPreview(null);
+      setPreviewError(null);
+      return;
+    }
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const refresh = async () => {
+      try {
+        const frame = await desktop.getCameraPreviewFrame(cameraId);
+        if (!cancelled) {
+          setPreview(frame);
+          setPreviewError(null);
+        }
+      } catch (error) {
+        if (!cancelled) setPreviewError((error as Error).message || "Camera preview unavailable");
+      }
+      if (!cancelled) timer = setTimeout(refresh, 1000);
+    };
+
+    refresh();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [enabled, cameraId, previewActive]);
 
   return (
     <SectionShell
@@ -31,10 +70,14 @@ export function CameraSelector({ enabled, onEnabledChange, cameraId, onCameraCha
     >
       <div className="flex items-center gap-4">
         <div className="relative flex size-24 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-border bg-muted">
-          {enabled ? (
+          {enabled && preview ? (
+            <img src={preview} alt="Camera preview" className="size-full object-cover" />
+          ) : enabled ? (
             <div className="flex size-full flex-col items-center justify-center bg-[var(--gradient-accent)] text-accent-foreground">
               <Camera className="size-6" />
-              <span className="mt-1 text-[10px] font-medium uppercase tracking-wider opacity-80">Preview</span>
+              <span className="mt-1 text-[10px] font-medium uppercase tracking-wider opacity-80">
+                {previewActive ? "Loading" : "Recording"}
+              </span>
             </div>
           ) : (
             <CameraOff className="size-6 text-muted-foreground" />
@@ -43,20 +86,23 @@ export function CameraSelector({ enabled, onEnabledChange, cameraId, onCameraCha
         <div className="min-w-0 flex-1">
           <Select value={cameraId ?? ""} onValueChange={(v) => onCameraChange(v)} disabled={!enabled}>
             <SelectTrigger>
-              <SelectValue placeholder="Select camera" />
+              <SelectValue placeholder={cameras.length ? "Select camera" : "No camera found"} />
             </SelectTrigger>
             <SelectContent>
               {cameras.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
-                  {c.name}
-                  {c.isDefault ? " · Default" : ""}
+                  {c.name}{c.isDefault ? " · Default" : ""}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <p className="mt-2 text-xs text-muted-foreground">
-            Appears as a floating bubble during recording.
-          </p>
+          {previewError ? (
+            <p className="mt-2 text-xs text-destructive">{previewError}</p>
+          ) : (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Camera is previewed here and appears as an overlay during recording.
+            </p>
+          )}
         </div>
       </div>
     </SectionShell>
