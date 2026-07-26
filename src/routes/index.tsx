@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Circle, Sparkles } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { SourceSelector } from "@/components/recorder/SourceSelector";
@@ -10,7 +10,7 @@ import { Countdown } from "@/components/recorder/Countdown";
 import { FloatingControls } from "@/components/recorder/FloatingControls";
 import { Button } from "@/components/ui/button";
 import { useRecorder } from "@/hooks/useRecorder";
-import { getSettings } from "@/services/desktop";
+import { getSettings, getSystemAudioSupported } from "@/services/desktop";
 import type { CaptureTarget } from "@/types/recorder";
 
 export const Route = createFileRoute("/")({
@@ -27,13 +27,6 @@ export const Route = createFileRoute("/")({
   component: RecorderPage,
 });
 
-function detectSystemAudioSupport(): { supported: boolean; note: string } {
-  return {
-    supported: false,
-    note: "System audio is being implemented with Windows WASAPI loopback. This build records screen/window video, microphone, and optional camera; the toggle stays disabled so it cannot silently produce a recording without system sound.",
-  };
-}
-
 function RecorderPage() {
   const navigate = useNavigate();
   const recorder = useRecorder();
@@ -43,9 +36,8 @@ function RecorderPage() {
   const [cameraOn, setCameraOn] = useState(false);
   const [cameraId, setCameraId] = useState<string | null>(null);
   const [systemAudioOn, setSystemAudioOn] = useState(false);
+  const [systemAudioSupported, setSystemAudioSupported] = useState(false);
   const [fps, setFps] = useState(30);
-
-  const audioSupport = useMemo(() => detectSystemAudioSupport(), []);
 
   useEffect(() => {
     getSettings().then((s) => {
@@ -53,6 +45,7 @@ function RecorderPage() {
       if (!micId) setMicId(s.defaultMicrophoneId);
       if (!cameraId) setCameraId(s.defaultCameraId);
     });
+    getSystemAudioSupported().then(setSystemAudioSupported).catch(() => setSystemAudioSupported(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -64,7 +57,7 @@ function RecorderPage() {
       target,
       microphoneId: micOn ? micId : null,
       cameraId: cameraOn ? cameraId : null,
-      systemAudio: systemAudioOn && audioSupport.supported,
+      systemAudio: systemAudioOn && systemAudioSupported,
       fps,
     });
   };
@@ -102,13 +95,19 @@ function RecorderPage() {
 
       <div className="grid gap-4 md:grid-cols-2">
         <MicSelector enabled={micOn} onEnabledChange={setMicOn} micId={micId} onMicChange={setMicId} />
-        <CameraSelector enabled={cameraOn} onEnabledChange={setCameraOn} cameraId={cameraId} onCameraChange={setCameraId} />
+        <CameraSelector
+          enabled={cameraOn}
+          onEnabledChange={setCameraOn}
+          cameraId={cameraId}
+          onCameraChange={setCameraId}
+          previewActive={recorder.status === "idle"}
+        />
         <div className="md:col-span-2">
           <SystemAudioToggle
             enabled={systemAudioOn}
             onEnabledChange={setSystemAudioOn}
-            supported={audioSupport.supported}
-            platformNote={audioSupport.note}
+            supported={systemAudioSupported}
+            platformNote="Windows did not expose a loopback capture endpoint. Enable Stereo Mix/What U Hear in Windows sound settings, or leave System Audio off."
           />
         </div>
       </div>
@@ -125,12 +124,8 @@ function RecorderPage() {
           </span>
           <span className="text-base font-semibold">Start Recording</span>
         </Button>
-        {!target && (
-          <p className="text-xs text-muted-foreground">Select a screen or window to enable recording.</p>
-        )}
-        {recorder.error && (
-          <p className="text-xs text-destructive">Error: {recorder.error.message}</p>
-        )}
+        {!target && <p className="text-xs text-muted-foreground">Select a screen or window to enable recording.</p>}
+        {recorder.error && <p className="text-xs text-destructive">Error: {recorder.error.message}</p>}
       </div>
 
       {recorder.status === "countdown" && recorder.countdown !== null && <Countdown value={recorder.countdown} />}
