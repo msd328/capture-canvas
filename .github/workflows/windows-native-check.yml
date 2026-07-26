@@ -1,0 +1,28 @@
+name: Windows native check
+
+on:
+  push:
+    branches: [feature/windows-native-capture]
+  pull_request:
+    branches: [main]
+
+jobs:
+  rust-check:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: src-tauri
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Cargo check
+        run: cargo check --no-default-features
