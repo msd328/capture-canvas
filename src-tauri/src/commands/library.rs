@@ -37,6 +37,7 @@ pub fn delete_recording(id: String, state: State<'_, AppState>) -> Result<(), St
         }
     }
     state.library.recordings.write().retain(|r| r.id != id);
+    state.library.persist()?;
     Ok(())
 }
 
@@ -46,13 +47,17 @@ pub fn rename_recording(
     title: String,
     state: State<'_, AppState>,
 ) -> Result<RecordingOutput, String> {
-    let mut guard = state.library.recordings.write();
-    let rec = guard
-        .iter_mut()
-        .find(|r| r.id == id)
-        .ok_or_else(|| "Recording not found".to_string())?;
-    rec.title = title;
-    Ok(rec.clone())
+    let updated = {
+        let mut guard = state.library.recordings.write();
+        let rec = guard
+            .iter_mut()
+            .find(|r| r.id == id)
+            .ok_or_else(|| "Recording not found".to_string())?;
+        rec.title = title;
+        rec.clone()
+    };
+    state.library.persist()?;
+    Ok(updated)
 }
 
 #[tauri::command]
