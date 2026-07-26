@@ -107,9 +107,7 @@ impl RecordingEngine {
         let Some(paused_at) = rec.paused_at.take() else {
             return Ok(());
         };
-        rec.paused_total_ms = rec
-            .paused_total_ms
-            .saturating_add(paused_at.elapsed().as_millis() as u64);
+        rec.paused_total_ms = rec.paused_total_ms.saturating_add(paused_at.elapsed().as_millis() as u64);
 
         let source = capture::resolve_target(&rec.config.target)?;
         let next_index = rec.segment_paths.len();
@@ -129,13 +127,8 @@ impl RecordingEngine {
         }
 
         let paused = rec.paused_total_ms
-            + rec
-                .paused_at
-                .map(|at| at.elapsed().as_millis() as u64)
-                .unwrap_or(0);
-        let duration_ms = (Instant::now()
-            .duration_since(rec.started_at)
-            .as_millis() as u64)
+            + rec.paused_at.map(|at| at.elapsed().as_millis() as u64).unwrap_or(0);
+        let duration_ms = (Instant::now().duration_since(rec.started_at).as_millis() as u64)
             .saturating_sub(paused)
             .max(1);
 
@@ -148,10 +141,7 @@ impl RecordingEngine {
 
         Ok(RecordingOutput {
             id: rec.id,
-            title: rec
-                .config
-                .title
-                .unwrap_or_else(|| format!("Recording {}", Utc::now().format("%Y-%m-%d %H:%M"))),
+            title: rec.config.title.unwrap_or_else(|| format!("Recording {}", Utc::now().format("%Y-%m-%d %H:%M"))),
             file_path: rec.final_path.to_string_lossy().to_string(),
             created_at: Utc::now().to_rfc3339(),
             duration_ms,
@@ -169,9 +159,7 @@ fn ensure_ffmpeg_available() -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .map_err(|_| anyhow!(
-            "FFmpeg is required for the current Windows recording milestone but was not found on PATH. Install FFmpeg, restart PowerShell, and try again."
-        ))?;
+        .map_err(|_| anyhow!("FFmpeg is required but was not found on PATH. Install FFmpeg, restart PowerShell, and try again."))?;
     if !status.success() {
         return Err(anyhow!("FFmpeg is installed but could not be started"));
     }
@@ -208,26 +196,15 @@ fn segment_path(final_path: &Path, id: &str, index: usize) -> PathBuf {
 }
 
 fn choose_h264_encoder() -> &'static str {
-    let Ok(output) = Command::new("ffmpeg")
-        .args(["-hide_banner", "-encoders"])
-        .output()
-    else {
+    let Ok(output) = Command::new("ffmpeg").args(["-hide_banner", "-encoders"]).output() else {
         return "libx264";
     };
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&output.stderr));
-    if text.contains("h264_mf") {
-        "h264_mf"
-    } else {
-        "libx264"
-    }
+    if text.contains("h264_mf") { "h264_mf" } else { "libx264" }
 }
 
-fn spawn_segment(
-    config: &RecordingConfig,
-    source: &capture::CaptureSource,
-    output_path: &Path,
-) -> Result<Child> {
+fn spawn_segment(config: &RecordingConfig, source: &capture::CaptureSource, output_path: &Path) -> Result<Child> {
     let fps = config.fps.clamp(1, 60).to_string();
     let mut cmd = Command::new("ffmpeg");
     cmd.args(["-hide_banner", "-loglevel", "warning", "-y"]);
@@ -241,36 +218,26 @@ fn spawn_segment(
 
     let mut next_input = 1usize;
     let mic_input = if let Some(id) = config.microphone_id.as_deref() {
-        let name = audio::resolve_microphone_name(id)
-            .ok_or_else(|| anyhow!("The selected microphone is no longer available"))?;
+        let name = audio::resolve_microphone_name(id).ok_or_else(|| anyhow!("The selected microphone is no longer available"))?;
         cmd.args(["-thread_queue_size", "1024", "-f", "dshow", "-i", &format!("audio={name}")]);
         let index = next_input;
         next_input += 1;
         Some(index)
-    } else {
-        None
-    };
+    } else { None };
 
     let system_input = if config.system_audio {
-        let name = audio::resolve_system_audio_name()
-            .ok_or_else(|| anyhow!("Windows system-audio loopback device is unavailable"))?;
+        let name = audio::resolve_system_audio_name().ok_or_else(|| anyhow!("Windows system-audio loopback device is unavailable"))?;
         cmd.args(["-thread_queue_size", "1024", "-f", "dshow", "-i", &format!("audio={name}")]);
         let index = next_input;
         next_input += 1;
         Some(index)
-    } else {
-        None
-    };
+    } else { None };
 
     let camera_input = if let Some(id) = config.camera_id.as_deref() {
-        let name = camera::resolve_camera_name(id)
-            .ok_or_else(|| anyhow!("The selected camera is no longer available"))?;
+        let name = camera::resolve_camera_name(id).ok_or_else(|| anyhow!("The selected camera is no longer available"))?;
         cmd.args(["-thread_queue_size", "1024", "-f", "dshow", "-i", &format!("video={name}")]);
-        let index = next_input;
-        Some(index)
-    } else {
-        None
-    };
+        Some(next_input)
+    } else { None };
 
     let mut filter_parts = Vec::<String>::new();
     if let Some(index) = camera_input {
@@ -280,7 +247,7 @@ fn spawn_segment(
     }
     if let (Some(mic), Some(system)) = (mic_input, system_input) {
         filter_parts.push(format!(
-            "[{mic}:a][{system}:a]aresample=async=1:first_pts=0,amix=inputs=2:duration=longest:dropout_transition=2[a]"
+            "[{mic}:a]aresample=async=1:first_pts=0[micr];[{system}:a]aresample=async=1:first_pts=0[sysr];[micr][sysr]amix=inputs=2:duration=longest:dropout_transition=2[a]"
         ));
     }
 
@@ -295,11 +262,11 @@ fn spawn_segment(
     }
 
     match (mic_input, system_input) {
-        (Some(_), Some(_)) => cmd.args(["-map", "[a]"]),
-        (Some(index), None) => cmd.args(["-map", &format!("{index}:a:0")]),
-        (None, Some(index)) => cmd.args(["-map", &format!("{index}:a:0")]),
-        (None, None) => cmd.arg("-an"),
-    };
+        (Some(_), Some(_)) => { cmd.args(["-map", "[a]"]); }
+        (Some(index), None) => { cmd.args(["-map", &format!("{index}:a:0")]); }
+        (None, Some(index)) => { cmd.args(["-map", &format!("{index}:a:0")]); }
+        (None, None) => { cmd.arg("-an"); }
+    }
 
     let encoder = choose_h264_encoder();
     cmd.args(["-c:v", encoder, "-pix_fmt", "yuv420p"]);
@@ -313,9 +280,7 @@ fn spawn_segment(
     }
     cmd.args(["-r", &fps, "-movflags", "+faststart"]);
     cmd.arg(output_path);
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::inherit());
+    cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::inherit());
 
     let mut child = cmd.spawn().context("Unable to start FFmpeg recording process")?;
     thread::sleep(Duration::from_millis(650));
