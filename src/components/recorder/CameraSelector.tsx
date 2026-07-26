@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Camera, CameraOff } from "lucide-react";
 import * as desktop from "@/services/desktop";
 import type { CameraInfo } from "@/types/recorder";
@@ -14,6 +14,14 @@ interface Props {
   previewActive?: boolean;
 }
 
+function normalizeDeviceName(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/^dshow-camera:/, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
 export function CameraSelector({
   enabled,
   onEnabledChange,
@@ -22,45 +30,85 @@ export function CameraSelector({
   previewActive = true,
 }: Props) {
   const [cameras, setCameras] = useState<CameraInfo[]>([]);
-  const [preview, setPreview] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     desktop.listCameras().then((list) => {
+      if (cancelled) return;
       setCameras(list);
       if (!cameraId && list.length) onCameraChange(list.find((c) => c.isDefault)?.id ?? list[0].id);
     });
-  }, [cameraId, onCameraChange]);
+    return () => {
+      cancelled = true;
+    };
+    // Device enumeration does not need to run again when selection changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (!enabled || !cameraId || !previewActive || !desktop.isDesktop()) {
-      setPreview(null);
       setPreviewError(null);
+      if (videoRef.current) videoRef.current.srcObject = null;
+      return;
+    }
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setPreviewError("Camera preview is unavailable in this WebView.");
       return;
     }
 
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let stream: MediaStream | null = null;
 
-    const refresh = async () => {
+    const startPreview = async () => {
       try {
-        const frame = await desktop.getCameraPreviewFrame(cameraId);
-        if (!cancelled) {
-          setPreview(frame);
-          setPreviewError(null);
+        // Ask once so WebView2 can expose device labels, then choose the browser
+        // camera whose label most closely matches the DirectShow camera selected
+        // for the native recording pipeline.
+        const permissionStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        permissionStream.getTracks().forEach((track) => track.stop());
+
+        const selected = cameras.find((camera) => camera.id === cameraId);
+        const wanted = normalizeDeviceName(selected?.name ?? cameraId);
+        const browserCamera = devices.find((device) => {
+          if (device.kind !== "videoinput") return false;
+          const label = normalizeDeviceName(device.label);
+          return label === wanted || label.includes(wanted) || wanted.includes(label);
+        });
+
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: browserCamera?.deviceId
+            ? { deviceId: { exact: browserCamera.deviceId }, width: { ideal: 640 }, height: { ideal: 360 } }
+            : { width: { ideal: 640 }, height: { ideal: 360 } },
+          audio: false,
+        });
+
+        if (cancelled) {
+          stream.getTracks().forEach((track) => track.stop());
+          return;
         }
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play().catch(() => undefined);
+        }
+        setPreviewError(null);
       } catch (error) {
-        if (!cancelled) setPreviewError((error as Error).message || "Camera preview unavailable");
+        if (!cancelled) {
+          setPreviewError((error as Error).message || "Camera preview unavailable");
+        }
       }
-      if (!cancelled) timer = setTimeout(refresh, 1000);
     };
 
-    refresh();
+    void startPreview();
     return () => {
       cancelled = true;
-      if (timer) clearTimeout(timer);
+      if (videoRef.current) videoRef.current.srcObject = null;
+      stream?.getTracks().forEach((track) => track.stop());
     };
-  }, [enabled, cameraId, previewActive]);
+  }, [enabled, cameraId, previewActive, cameras]);
 
   return (
     <SectionShell
@@ -70,14 +118,12 @@ export function CameraSelector({
     >
       <div className="flex items-center gap-4">
         <div className="relative flex size-24 shrink-0 items-center justify-center overflow-hidden rounded-full border-2 border-border bg-muted">
-          {enabled && preview ? (
-            <img src={preview} alt="Camera preview" className="size-full object-cover" />
+          {enabled && previewActive ? (
+            <video ref={videoRef} muted playsInline className="size-full object-cover" />
           ) : enabled ? (
             <div className="flex size-full flex-col items-center justify-center bg-[var(--gradient-accent)] text-accent-foreground">
               <Camera className="size-6" />
-              <span className="mt-1 text-[10px] font-medium uppercase tracking-wider opacity-80">
-                {previewActive ? "Loading" : "Recording"}
-              </span>
+              <span className="mt-1 text-[10px] font-medium uppercase tracking-wider opacity-80">Recording</span>
             </div>
           ) : (
             <CameraOff className="size-6 text-muted-foreground" />
@@ -100,7 +146,7 @@ export function CameraSelector({
             <p className="mt-2 text-xs text-destructive">{previewError}</p>
           ) : (
             <p className="mt-2 text-xs text-muted-foreground">
-              Camera is previewed here and appears as an overlay during recording.
+              Live preview uses one persistent camera stream; recording still uses the native desktop pipeline.
             </p>
           )}
         </div>
