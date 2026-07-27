@@ -16,6 +16,7 @@ use std::sync::{
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use windows_capture::capture::{CaptureControl, Context as CaptureContext, GraphicsCaptureApiHandler};
+use windows_capture::d3d11::SendDirectX;
 use windows_capture::encoder::{
     AudioSettingsBuilder, ContainerSettingsBuilder, VideoEncoder, VideoSettingsBuilder,
     VideoSettingsSubType,
@@ -28,11 +29,17 @@ use windows_capture::settings::{
     GraphicsCaptureItemType, MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
 };
 use windows_capture::window::Window;
+use windows_capture_windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 
 const MIX_SAMPLE_RATE: u32 = 48_000;
 const MIX_CHANNELS: u32 = 2;
 const MIX_CHUNK_FRAMES: usize = 480; // 10 ms at 48 kHz.
+const MIX_PREBUFFER_FRAMES: usize = 2_400; // 50 ms startup cushion.
 const MAX_MIX_QUEUE_FRAMES: usize = 96_000; // Bound each source to two seconds.
+const MIC_GAIN: f32 = 1.35;
+const SYSTEM_GAIN: f32 = 0.68;
+const SYSTEM_DUCK_GAIN: f32 = 0.42;
+const MIC_DUCK_RMS: f32 = 0.018;
 
 #[derive(Clone, Copy)]
 struct AudioSpec {
@@ -88,6 +95,7 @@ struct GpuFrameEncoder {
     frame_interval_hns: i64,
     next_frame_hns: Option<i64>,
     camera_frame: Option<CameraFrameSlot>,
+    camera_texture: Option<SendDirectX<ID3D11Texture2D>>,
 }
 
 impl GpuFrameEncoder {
@@ -113,13 +121,48 @@ impl GpuFrameEncoder {
             })
     }
 
-    fn overlay_camera(&self, frame: &mut Frame) -> Result<(), String> {
+    fn ensure_camera_texture(&mut self, frame: &Frame) -> Result<(), String> {
+        if self.camera_texture.is_some() {
+            return Ok(());
+        }
+
+        let mut desc = *frame.desc();
+        desc.Width = camera::OVERLAY_WIDTH;
+        desc.Height = camera::OVERLAY_HEIGHT;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.SampleDesc.Count = 1;
+        desc.SampleDesc.Quality = 0;
+        desc.BindFlags = 0;
+        desc.CPUAccessFlags = 0;
+        desc.MiscFlags = 0;
+
+        let mut texture = None;
+        unsafe {
+            frame
+                .device()
+                .CreateTexture2D(&desc, None, Some(&mut texture))
+                .map_err(|error| format!("Unable to create persistent D3D11 camera overlay texture: {error}"))?;
+        }
+        let texture = texture
+            .ok_or_else(|| "D3D11 did not return a camera overlay texture".to_string())?;
+        self.camera_texture = Some(SendDirectX::new(texture));
+        Ok(())
+    }
+
+    fn overlay_camera(&mut self, frame: &mut Frame) -> Result<(), String> {
         let Some(slot) = self.camera_frame.as_ref() else {
             return Ok(());
         };
-        let latest = slot.lock();
-        let Some(bytes) = latest.as_ref() else {
-            return Ok(());
+
+        // Copy the small webcam frame out of the shared slot first. This keeps the
+        // camera reader free while D3D11 commands are submitted.
+        let bytes = {
+            let latest = slot.lock();
+            let Some(bytes) = latest.as_ref() else {
+                return Ok(());
+            };
+            bytes.clone()
         };
 
         let camera_width = camera::OVERLAY_WIDTH;
@@ -132,40 +175,25 @@ impl GpuFrameEncoder {
             ));
         }
 
-        // Leave a 24px margin around the webcam rectangle. Very small captured
-        // windows simply skip the overlay rather than corrupting the D3D resource.
         if frame.width() <= camera_width + 48 || frame.height() <= camera_height + 48 {
             return Ok(());
         }
 
-        // The full screen remains on the GPU. Only the small normalized webcam
-        // frame crosses CPU memory before being copied into the capture texture.
-        let mut desc = *frame.desc();
-        desc.Width = camera_width;
-        desc.Height = camera_height;
-        desc.MipLevels = 1;
-        desc.ArraySize = 1;
-        desc.SampleDesc.Count = 1;
-        desc.SampleDesc.Quality = 0;
-        desc.BindFlags = 0;
-        desc.CPUAccessFlags = 0;
-        desc.MiscFlags = 0;
-
-        let mut camera_texture = None;
-        unsafe {
-            frame
-                .device()
-                .CreateTexture2D(&desc, None, Some(&mut camera_texture))
-                .map_err(|error| format!("Unable to create D3D11 camera overlay texture: {error}"))?;
-        }
-        let camera_texture = camera_texture
-            .ok_or_else(|| "D3D11 did not return a camera overlay texture".to_string())?;
+        // Reuse one GPU resource for the whole recording. The previous implementation
+        // created and destroyed a D3D11 texture every encoded frame, which caused
+        // intermittent camera-overlay stalls/flicker on some drivers.
+        self.ensure_camera_texture(frame)?;
+        let camera_texture = &self
+            .camera_texture
+            .as_ref()
+            .ok_or_else(|| "Camera overlay texture was not initialized".to_string())?
+            .0;
 
         let dst_x = frame.width() - camera_width - 24;
         let dst_y = frame.height() - camera_height - 24;
         unsafe {
             frame.device_context().UpdateSubresource(
-                &camera_texture,
+                camera_texture,
                 0,
                 None,
                 bytes.as_ptr().cast::<c_void>(),
@@ -178,10 +206,12 @@ impl GpuFrameEncoder {
                 dst_x,
                 dst_y,
                 0,
-                &camera_texture,
+                camera_texture,
                 0,
                 None,
             );
+            // The encoder consumes the WGC surface asynchronously. Flush submits the
+            // ordered upload/copy before the surface is handed to Media Foundation.
             frame.device_context().Flush();
         }
         Ok(())
@@ -230,6 +260,7 @@ impl GraphicsCaptureApiHandler for GpuFrameEncoder {
             frame_interval_hns: (10_000_000i64 / i64::from(fps)).max(1),
             next_frame_hns: None,
             camera_frame: ctx.flags.camera_frame,
+            camera_texture: None,
         })
     }
 
@@ -243,8 +274,8 @@ impl GraphicsCaptureApiHandler for GpuFrameEncoder {
             .map_err(|error| format!("Unable to read WGC frame timestamp: {error}"))?
             .Duration;
 
-        // WGC can deliver at the desktop refresh rate. Decimate before any camera
-        // upload or encoder work so high-refresh monitors remain bounded.
+        // WGC can deliver at desktop refresh rate. Decimate before camera upload or
+        // encoder work so 120/144 Hz monitors remain bounded at the requested FPS.
         if let Some(next) = self.next_frame_hns {
             if timestamp < next {
                 return Ok(());
@@ -296,9 +327,9 @@ fn resolve_microphone_input(id: &str) -> Result<AudioInput> {
             partial_match = Some(device);
         }
     }
-    let device = selected
-        .or(partial_match)
-        .ok_or_else(|| anyhow!("The selected microphone is not available through Windows audio capture: {requested_name}"))?;
+    let device = selected.or(partial_match).ok_or_else(|| {
+        anyhow!("The selected microphone is not available through Windows audio capture: {requested_name}")
+    })?;
     let supported = device
         .default_input_config()
         .with_context(|| format!("Unable to read microphone format for {requested_name}"))?;
@@ -324,7 +355,10 @@ fn audio_input_from_supported(
     let sample_format = supported.sample_format();
     let config: StreamConfig = supported.into();
     if config.channels == 0 || config.sample_rate.0 == 0 {
-        return Err(anyhow!("The {} endpoint reported an invalid audio format", source.label()));
+        return Err(anyhow!(
+            "The {} endpoint reported an invalid audio format",
+            source.label()
+        ));
     }
 
     Ok(AudioInput {
@@ -368,8 +402,6 @@ struct NativeSingleAudioCapture {
     error_state: Arc<Mutex<Option<String>>>,
 }
 
-// CPAL's WASAPI stream is owned and stopped exclusively by the recording
-// session. It never escapes the recorder state except behind this wrapper.
 unsafe impl Send for NativeSingleAudioCapture {}
 
 impl NativeSingleAudioCapture {
@@ -442,7 +474,9 @@ fn start_audio_capture(
             let errors = error_state.clone();
             input.device.build_input_stream(
                 &input.config,
-                move |data: &[i32], _| submit_audio_pcm(&sink, &errors, source, data, |v| (v >> 16) as i16),
+                move |data: &[i32], _| {
+                    submit_audio_pcm(&sink, &errors, source, data, |v| (v >> 16) as i16)
+                },
                 error_callback,
                 None,
             )
@@ -625,13 +659,36 @@ fn build_resampled_stream(
     Ok(stream)
 }
 
-fn drain_mix_chunk(queue: &AudioFrameQueue) -> Vec<[f32; 2]> {
+fn queue_len(queue: &AudioFrameQueue) -> usize {
+    queue.lock().len()
+}
+
+fn try_drain_mix_chunk(queue: &AudioFrameQueue) -> Option<Vec<[f32; 2]>> {
     let mut queue = queue.lock();
+    if queue.len() < MIX_CHUNK_FRAMES {
+        // Crucial: do not consume a short callback and pad the remainder with
+        // silence. Keeping partial data lets the next callback complete the block.
+        return None;
+    }
+
     let mut chunk = Vec::with_capacity(MIX_CHUNK_FRAMES);
     for _ in 0..MIX_CHUNK_FRAMES {
-        chunk.push(queue.pop_front().unwrap_or([0.0, 0.0]));
+        if let Some(frame) = queue.pop_front() {
+            chunk.push(frame);
+        }
     }
-    chunk
+    Some(chunk)
+}
+
+fn silence_chunk() -> Vec<[f32; 2]> {
+    vec![[0.0, 0.0]; MIX_CHUNK_FRAMES]
+}
+
+fn microphone_rms(chunk: &[[f32; 2]]) -> f32 {
+    let sum = chunk.iter().fold(0.0f32, |acc, frame| {
+        acc + frame[0] * frame[0] + frame[1] * frame[1]
+    });
+    (sum / (chunk.len().max(1) as f32 * 2.0)).sqrt()
 }
 
 fn start_mixer_thread(
@@ -642,20 +699,38 @@ fn start_mixer_thread(
     error_state: Arc<Mutex<Option<String>>>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
+        // Let the independent WASAPI callback clocks build a small cushion first.
+        // This avoids the mixer starting at t=0 and repeatedly draining one source
+        // before the other source's first callback has arrived.
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while !stop.load(Ordering::Acquire)
+            && Instant::now() < deadline
+            && (queue_len(&microphone_queue) < MIX_PREBUFFER_FRAMES
+                || queue_len(&system_queue) < MIX_PREBUFFER_FRAMES)
+        {
+            thread::sleep(Duration::from_millis(5));
+        }
+
         let period = Duration::from_millis(10);
         let mut next_tick = Instant::now();
 
         while !stop.load(Ordering::Acquire) {
-            let microphone = drain_mix_chunk(&microphone_queue);
-            let system = drain_mix_chunk(&system_queue);
-            let mut pcm = Vec::with_capacity(MIX_CHUNK_FRAMES * MIX_CHANNELS as usize * 2);
+            let microphone = try_drain_mix_chunk(&microphone_queue).unwrap_or_else(silence_chunk);
+            let system = try_drain_mix_chunk(&system_queue).unwrap_or_else(silence_chunk);
+            let mic_rms = microphone_rms(&microphone);
+            let system_gain = if mic_rms >= MIC_DUCK_RMS {
+                SYSTEM_DUCK_GAIN
+            } else {
+                SYSTEM_GAIN
+            };
 
+            let mut pcm = Vec::with_capacity(MIX_CHUNK_FRAMES * MIX_CHANNELS as usize * 2);
             for index in 0..MIX_CHUNK_FRAMES {
-                // Preserve useful headroom when both sources are loud. A single
-                // source at normal speech/media levels remains close to its input.
-                let left = (microphone[index][0] * 0.8 + system[index][0] * 0.8)
+                // Microphone has priority over media audio. When speech is present,
+                // system audio ducks instead of masking the speaker's voice.
+                let left = (microphone[index][0] * MIC_GAIN + system[index][0] * system_gain)
                     .clamp(-1.0, 1.0);
-                let right = (microphone[index][1] * 0.8 + system[index][1] * 0.8)
+                let right = (microphone[index][1] * MIC_GAIN + system[index][1] * system_gain)
                     .clamp(-1.0, 1.0);
                 pcm.extend_from_slice(&((left * i16::MAX as f32).round() as i16).to_le_bytes());
                 pcm.extend_from_slice(&((right * i16::MAX as f32).round() as i16).to_le_bytes());
@@ -677,7 +752,7 @@ fn start_mixer_thread(
             if next_tick > now {
                 thread::sleep(next_tick - now);
             } else {
-                // Do not burst old audio chunks to catch up after a scheduler stall.
+                // Never burst stale audio after a scheduler stall.
                 next_tick = now;
             }
         }
@@ -717,6 +792,16 @@ fn start_mixed_audio_capture(
     system: AudioInput,
     callback: Arc<Mutex<GpuFrameEncoder>>,
 ) -> Result<NativeMixedAudioCapture> {
+    eprintln!(
+        "[Recorder] Native audio mixer: mic={}Hz/{}ch, system={}Hz/{}ch -> {}Hz/{}ch",
+        microphone.spec.sample_rate,
+        microphone.spec.channels,
+        system.spec.sample_rate,
+        system.spec.channels,
+        MIX_SAMPLE_RATE,
+        MIX_CHANNELS
+    );
+
     let microphone_queue: AudioFrameQueue = Arc::new(Mutex::new(VecDeque::new()));
     let system_queue: AudioFrameQueue = Arc::new(Mutex::new(VecDeque::new()));
     let error_state = Arc::new(Mutex::new(None::<String>));
@@ -888,13 +973,11 @@ where
 
     let callback = control.callback();
     let audio_result: Result<Option<NativeAudioCapture>> = match (microphone_input, system_input) {
-        (Some(microphone), Some(system)) => start_mixed_audio_capture(
-            microphone,
-            system,
-            callback.clone(),
-        )
-        .map(NativeAudioCapture::Mixed)
-        .map(Some),
+        (Some(microphone), Some(system)) => {
+            start_mixed_audio_capture(microphone, system, callback.clone())
+                .map(NativeAudioCapture::Mixed)
+                .map(Some)
+        }
         (Some(input), None) | (None, Some(input)) => start_audio_capture(input, callback.clone())
             .map(NativeAudioCapture::Single)
             .map(Some),
