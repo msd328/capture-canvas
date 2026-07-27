@@ -28,6 +28,7 @@ mod windows_backend {
     use std::ffi::c_void;
     use windows::core::BOOL;
     use windows::Win32::Foundation::{HWND, LPARAM, RECT};
+    use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
     use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFO};
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, IsIconic, IsWindow,
@@ -66,12 +67,34 @@ mod windows_backend {
         (!title.is_empty()).then_some(title)
     }
 
+    /// Windows' GetWindowRect includes invisible resize borders on modern desktop
+    /// windows. WGC captures the visible DWM frame instead, so prefer the DWM
+    /// extended-frame bounds and retain GetWindowRect only as a compatibility
+    /// fallback. This keeps the encoder dimensions aligned with WGC frames.
+    fn visible_window_rect(hwnd: HWND) -> Result<RECT> {
+        let mut rect = RECT::default();
+        let dwm = unsafe {
+            DwmGetWindowAttribute(
+                hwnd,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                &mut rect as *mut RECT as *mut c_void,
+                std::mem::size_of::<RECT>() as u32,
+            )
+        };
+        if dwm.is_ok() && rect.right > rect.left && rect.bottom > rect.top {
+            return Ok(rect);
+        }
+
+        unsafe { GetWindowRect(hwnd, &mut rect) }
+            .map_err(|_| anyhow!("Unable to read selected window bounds"))?;
+        Ok(rect)
+    }
+
     unsafe extern "system" fn window_callback(hwnd: HWND, data: LPARAM) -> BOOL {
         if !unsafe { IsWindowVisible(hwnd) }.as_bool() || unsafe { IsIconic(hwnd) }.as_bool() { return BOOL(1); }
         let Some(title) = window_title(hwnd) else { return BOOL(1); };
         if title == "Recorder" || title == "Program Manager" { return BOOL(1); }
-        let mut rect = RECT::default();
-        if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() { return BOOL(1); }
+        let Ok(rect) = visible_window_rect(hwnd) else { return BOOL(1); };
         let width = (rect.right - rect.left).max(0) as u32;
         let height = (rect.bottom - rect.top).max(0) as u32;
         if width < 100 || height < 100 { return BOOL(1); }
@@ -129,8 +152,7 @@ mod windows_backend {
                     return Err(anyhow!("Selected window is minimized. Restore it before recording."));
                 }
                 let title = window_title(hwnd).ok_or_else(|| anyhow!("Selected window no longer has a capturable title"))?;
-                let mut rect = RECT::default();
-                unsafe { GetWindowRect(hwnd, &mut rect) }.map_err(|_| anyhow!("Unable to read selected window bounds"))?;
+                let rect = visible_window_rect(hwnd)?;
                 let width = (rect.right - rect.left).max(0) as u32;
                 let height = (rect.bottom - rect.top).max(0) as u32;
                 if width < 2 || height < 2 { return Err(anyhow!("Selected window has an invalid capture size")); }
