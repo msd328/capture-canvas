@@ -2,9 +2,9 @@
 //!
 //! Win32 remains responsible for enumerating and resolving selectable sources.
 //! Actual Windows recording frames come from Windows.Graphics.Capture/D3D11.
-//! Video-only capture prefers a native Direct3D -> Windows H.264 path; the
-//! existing FFmpeg path remains as a compatibility fallback for mic/camera
-//! composition while those inputs are migrated to native processing.
+//! The preferred path keeps screen video on D3D11 and can now attach microphone
+//! PCM directly to the native Windows H.264/AAC encoder. Camera composition still
+//! uses the FFmpeg compatibility backend until it is migrated to GPU compositing.
 
 use crate::recording::types::{CaptureKind, CaptureTarget, DisplayInfo, WindowInfo};
 use anyhow::Result;
@@ -38,21 +38,24 @@ pub fn start_native_video_capture(
     height: u32,
     output_path: &std::path::Path,
 ) -> Result<NativeVideoCapture> {
-    // The native Windows encoder currently owns the screen-video track. Keep
-    // DirectShow mic/camera composition on the established FFmpeg backend until
-    // those sources are migrated to native composition as well. System audio is
-    // independent and can still be muxed after the native video segment closes.
-    let native_gpu_eligible = config.microphone_id.is_none() && config.camera_id.is_none();
+    // Camera overlay still depends on the established FFmpeg filter path. Screen
+    // video with or without a microphone prefers the D3D11/native Windows encoder.
+    // System audio is independent and remains muxed after the video segment closes.
+    let native_gpu_eligible = config.camera_id.is_none();
 
     if native_gpu_eligible {
         match wgc_gpu::start_native_gpu_video_capture(config, target, width, height, output_path) {
             Ok(capture) => {
-                eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 encoder active");
+                if config.microphone_id.is_some() {
+                    eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 + microphone encoder active");
+                } else {
+                    eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 encoder active");
+                }
                 return Ok(NativeVideoCapture::Gpu(capture));
             }
             Err(native_error) => {
                 eprintln!(
-                    "[Recorder] Native Windows H.264 encoder unavailable ({native_error}); falling back to FFmpeg"
+                    "[Recorder] Native Windows encoder unavailable ({native_error}); falling back to FFmpeg"
                 );
                 // VideoEncoder may create the destination before a later Windows
                 // transcoder initialization error. Clear a partial file before the
