@@ -37,3 +37,7 @@ windows = { version = "0.61", features = [
 # its loopback-capable input stream and write a temporary PCM track per segment.
 cpal = "0.15"
 hound = "3.5"
+# MIT-licensed wrapper over Windows.Graphics.Capture + D3D11. It gives us real
+# HWND/HMONITOR capture, fixing the gdigrab white-window problem while keeping
+# our own recorder orchestration/encoding pipeline closed-source compatible.
+windows-capture = "2.0"
