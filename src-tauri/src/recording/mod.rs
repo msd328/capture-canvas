@@ -1,24 +1,22 @@
 //! Recording engine surface.
 //!
-//! The current Windows video milestone uses FFmpeg gdigrab for display/window
-//! frames, DirectShow for microphone/camera inputs, and native CPAL/WASAPI
-//! loopback for system audio. Native system audio is written to a temporary WAV
-//! track per pause/resume segment and mixed into that segment before final MP4
-//! concatenation. This removes the Stereo Mix / What U Hear dependency.
+//! Windows display/window frames now come from Windows.Graphics.Capture/D3D11.
+//! The WGC backend feeds BGRA frames into the existing FFmpeg H.264 pipeline,
+//! preserving microphone/camera composition while fixing gdigrab white-window
+//! capture. System audio is captured separately through CPAL/WASAPI and mixed
+//! into each pause/resume segment before final concatenation.
 
 pub mod types;
 
-use crate::{audio, camera, capture};
+use crate::{audio, capture};
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use parking_lot::Mutex;
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use uuid::Uuid;
 
 pub use types::*;
@@ -32,7 +30,7 @@ struct ActiveRecording {
     final_path: PathBuf,
     segment_paths: Vec<PathBuf>,
     system_audio_paths: Vec<PathBuf>,
-    current_child: Option<Child>,
+    current_video: Option<capture::NativeVideoCapture>,
     current_system_audio: Option<audio::SystemAudioCapture>,
     width: u32,
     height: u32,
@@ -73,13 +71,14 @@ impl RecordingEngine {
         }
 
         let first_segment = segment_path(&final_path, &id, 0);
-        let mut child = spawn_segment(&config, &source, &first_segment)?;
+        let video = capture::start_native_video_capture(&config, &config.target, width, height, &first_segment)?;
+
         let (current_system_audio, system_audio_paths) = if config.system_audio {
             let path = system_audio_path(&final_path, &id, 0);
             match audio::start_system_audio_capture(&path) {
                 Ok(capture) => (Some(capture), vec![path]),
                 Err(error) => {
-                    let _ = stop_ffmpeg(&mut child);
+                    let _ = video.stop();
                     let _ = fs::remove_file(&first_segment);
                     return Err(error.context("Unable to start native Windows system-audio capture"));
                 }
@@ -97,7 +96,7 @@ impl RecordingEngine {
             final_path,
             segment_paths: vec![first_segment],
             system_audio_paths,
-            current_child: Some(child),
+            current_video: Some(video),
             current_system_audio,
             width,
             height,
@@ -114,8 +113,8 @@ impl RecordingEngine {
         if let Some(system) = rec.current_system_audio.take() {
             system.stop()?;
         }
-        if let Some(mut child) = rec.current_child.take() {
-            stop_ffmpeg(&mut child)?;
+        if let Some(video) = rec.current_video.take() {
+            video.stop()?;
         }
         rec.paused_at = Some(Instant::now());
         Ok(())
@@ -129,10 +128,24 @@ impl RecordingEngine {
         };
         rec.paused_total_ms = rec.paused_total_ms.saturating_add(paused_at.elapsed().as_millis() as u64);
 
+        // Resolve again so disconnected monitors/closed windows produce a useful
+        // resume error rather than silently continuing against a stale handle.
         let source = capture::resolve_target(&rec.config.target)?;
+        let width = source.width & !1;
+        let height = source.height & !1;
+        if width != rec.width || height != rec.height {
+            return Err(anyhow!(
+                "The capture source size changed while paused ({}x{} -> {}x{}). Restore the original size and resume again.",
+                rec.width,
+                rec.height,
+                width,
+                height
+            ));
+        }
+
         let next_index = rec.segment_paths.len();
         let path = segment_path(&rec.final_path, &rec.id, next_index);
-        let mut child = spawn_segment(&rec.config, &source, &path)?;
+        let video = capture::start_native_video_capture(&rec.config, &rec.config.target, rec.width, rec.height, &path)?;
 
         let system_capture = if rec.config.system_audio {
             let system_path = system_audio_path(&rec.final_path, &rec.id, next_index);
@@ -142,7 +155,7 @@ impl RecordingEngine {
                     Some(capture)
                 }
                 Err(error) => {
-                    let _ = stop_ffmpeg(&mut child);
+                    let _ = video.stop();
                     let _ = fs::remove_file(&path);
                     return Err(error.context("Unable to resume native Windows system audio"));
                 }
@@ -152,7 +165,7 @@ impl RecordingEngine {
         };
 
         rec.segment_paths.push(path);
-        rec.current_child = Some(child);
+        rec.current_video = Some(video);
         rec.current_system_audio = system_capture;
         Ok(())
     }
@@ -164,8 +177,8 @@ impl RecordingEngine {
         if let Some(system) = rec.current_system_audio.take() {
             system.stop()?;
         }
-        if let Some(mut child) = rec.current_child.take() {
-            stop_ffmpeg(&mut child)?;
+        if let Some(video) = rec.current_video.take() {
+            video.stop()?;
         }
 
         let paused = rec.paused_total_ms
@@ -256,94 +269,6 @@ fn mixed_segment_path(segment: &Path) -> PathBuf {
     let parent = segment.parent().unwrap_or_else(|| Path::new("."));
     let stem = segment.file_stem().and_then(|value| value.to_str()).unwrap_or("segment");
     parent.join(format!("{stem}.mixed.mp4"))
-}
-
-fn choose_h264_encoder() -> &'static str {
-    let Ok(output) = Command::new("ffmpeg").args(["-hide_banner", "-encoders"]).output() else {
-        return "libx264";
-    };
-    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-    text.push_str(&String::from_utf8_lossy(&output.stderr));
-    if text.contains("h264_mf") { "h264_mf" } else { "libx264" }
-}
-
-fn spawn_segment(config: &RecordingConfig, source: &capture::CaptureSource, output_path: &Path) -> Result<Child> {
-    let fps = config.fps.clamp(1, 60).to_string();
-    let mut cmd = Command::new("ffmpeg");
-    cmd.args(["-hide_banner", "-loglevel", "warning", "-y"]);
-
-    cmd.args(["-thread_queue_size", "1024", "-f", "gdigrab", "-framerate", &fps, "-draw_mouse", "1"]);
-    if let (Some(x), Some(y)) = (source.offset_x, source.offset_y) {
-        cmd.args(["-offset_x", &x.to_string(), "-offset_y", &y.to_string()]);
-        cmd.args(["-video_size", &format!("{}x{}", source.width, source.height)]);
-    }
-    cmd.args(["-i", &source.ffmpeg_input]);
-
-    let mut next_input = 1usize;
-    let mic_input = if let Some(id) = config.microphone_id.as_deref() {
-        let name = audio::resolve_microphone_name(id).ok_or_else(|| anyhow!("The selected microphone is no longer available"))?;
-        cmd.args(["-thread_queue_size", "1024", "-f", "dshow", "-i", &format!("audio={name}")]);
-        let index = next_input;
-        next_input += 1;
-        Some(index)
-    } else { None };
-
-    let camera_input = if let Some(id) = config.camera_id.as_deref() {
-        let name = camera::resolve_camera_name(id).ok_or_else(|| anyhow!("The selected camera is no longer available"))?;
-        cmd.args(["-thread_queue_size", "1024", "-f", "dshow", "-i", &format!("video={name}")]);
-        Some(next_input)
-    } else { None };
-
-    if let Some(index) = camera_input {
-        let filter = format!(
-            "[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2[base];[{index}:v]scale=320:-2[cam];[base][cam]overlay=W-w-24:H-h-24[v]"
-        );
-        cmd.args(["-filter_complex", &filter, "-map", "[v]"]);
-    } else {
-        cmd.args(["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-map", "0:v:0"]);
-    }
-
-    if let Some(index) = mic_input {
-        cmd.args(["-map", &format!("{index}:a:0")]);
-    } else {
-        cmd.arg("-an");
-    }
-
-    let encoder = choose_h264_encoder();
-    cmd.args(["-c:v", encoder, "-pix_fmt", "yuv420p"]);
-    if encoder == "libx264" {
-        cmd.args(["-preset", "veryfast", "-crf", "23"]);
-    } else {
-        cmd.args(["-b:v", "6000k"]);
-    }
-    if mic_input.is_some() {
-        cmd.args(["-c:a", "aac", "-b:a", "160k"]);
-    }
-    cmd.args(["-r", &fps, "-movflags", "+faststart"]);
-    cmd.arg(output_path);
-    cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::inherit());
-
-    let mut child = cmd.spawn().context("Unable to start FFmpeg recording process")?;
-    thread::sleep(Duration::from_millis(250));
-    if let Some(status) = child.try_wait().context("Unable to inspect FFmpeg process")? {
-        return Err(anyhow!(
-            "FFmpeg stopped while starting the recording (exit code {}). Check the terminal output above for the device/capture error.",
-            status.code().map(|v| v.to_string()).unwrap_or_else(|| "unknown".into())
-        ));
-    }
-    Ok(child)
-}
-
-fn stop_ffmpeg(child: &mut Child) -> Result<()> {
-    if let Some(stdin) = child.stdin.as_mut() {
-        let _ = stdin.write_all(b"q\n");
-        let _ = stdin.flush();
-    }
-    let status = child.wait().context("Unable to finalize FFmpeg recording")?;
-    if !status.success() {
-        return Err(anyhow!("FFmpeg could not finalize the current recording segment"));
-    }
-    Ok(())
 }
 
 fn mix_native_system_audio_segments(video_segments: &[PathBuf], system_tracks: &[PathBuf], has_microphone: bool) -> Result<Vec<PathBuf>> {
