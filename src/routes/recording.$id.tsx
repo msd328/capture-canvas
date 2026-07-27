@@ -86,6 +86,7 @@ function RecordingPreviewPage() {
             <video
               className="h-full w-full object-contain"
               src={videoUrl}
+              poster={rec.thumbnailDataUrl ?? undefined}
               controls
               playsInline
               preload="metadata"
