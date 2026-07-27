@@ -95,38 +95,50 @@ impl GraphicsCaptureApiHandler for FramePipe {
         frame: &mut Frame,
         capture_control: InternalCaptureControl,
     ) -> Result<(), Self::Error> {
-        if frame.width() < self.width || frame.height() < self.height {
-            return Err(format!(
-                "Captured window became smaller than the recording size ({}x{} -> {}x{})",
-                self.width,
-                self.height,
-                frame.width(),
-                frame.height()
-            ));
-        }
-
-        let buffer = if frame.width() == self.width && frame.height() == self.height {
-            frame
-                .buffer()
-                .map_err(|e| format!("Unable to map WGC frame: {e}"))?
-        } else {
-            frame
-                .buffer_crop(0, 0, self.width, self.height)
-                .map_err(|e| format!("Unable to crop WGC frame: {e}"))?
-        };
+        let frame_width = frame.width();
+        let frame_height = frame.height();
+        let buffer = frame
+            .buffer()
+            .map_err(|e| format!("Unable to map WGC frame: {e}"))?;
 
         self.scratch.clear();
         let bytes = buffer.as_nopadding_buffer(&mut self.scratch);
-        let expected = self.width as usize * self.height as usize * 4;
-        if bytes.len() != expected {
+        let source_expected = frame_width as usize * frame_height as usize * 4;
+        if bytes.len() != source_expected {
             return Err(format!(
-                "Unexpected WGC frame size: got {}, expected {expected}",
+                "Unexpected WGC frame size: got {}, expected {source_expected}",
                 bytes.len()
             ));
         }
 
         self.last_frame.clear();
-        self.last_frame.extend_from_slice(bytes);
+        if frame_width == self.width && frame_height == self.height {
+            self.last_frame.extend_from_slice(bytes);
+        } else {
+            // FFmpeg's rawvideo dimensions are fixed for the lifetime of a
+            // segment. Windows can change a WGC window's content size while the
+            // session is active, so normalize every changed frame into that fixed
+            // canvas instead of aborting the recording. Larger frames are center-
+            // cropped and smaller frames are center-letterboxed with black.
+            let output_len = self.width as usize * self.height as usize * 4;
+            self.last_frame.resize(output_len, 0);
+
+            let copy_width = frame_width.min(self.width) as usize;
+            let copy_height = frame_height.min(self.height) as usize;
+            let src_x = ((frame_width as usize).saturating_sub(copy_width)) / 2;
+            let src_y = ((frame_height as usize).saturating_sub(copy_height)) / 2;
+            let dst_x = ((self.width as usize).saturating_sub(copy_width)) / 2;
+            let dst_y = ((self.height as usize).saturating_sub(copy_height)) / 2;
+            let row_bytes = copy_width * 4;
+
+            for row in 0..copy_height {
+                let src_start = ((src_y + row) * frame_width as usize + src_x) * 4;
+                let dst_start = ((dst_y + row) * self.width as usize + dst_x) * 4;
+                self.last_frame[dst_start..dst_start + row_bytes]
+                    .copy_from_slice(&bytes[src_start..src_start + row_bytes]);
+            }
+        }
+
         let target = self.target_frame_count();
         let current = self.last_frame.clone();
         if let Err(error) = self.write_frame_copies(&current, target) {
