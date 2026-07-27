@@ -1,13 +1,16 @@
 //! Audio capture helpers.
 //!
-//! Microphone enumeration uses Windows device APIs. Microphone recording still
-//! uses DirectShow in the current encoder process. Windows system audio is now
-//! captured natively from the default render endpoint through CPAL/WASAPI into
-//! a temporary floating-point WAV track, which the recording finalizer mixes
-//! into the MP4. This removes the old Stereo Mix / What U Hear requirement.
+//! Microphone enumeration uses Windows device APIs. The preferred D3D11 capture
+//! path now records microphone PCM directly into the native Windows H.264/AAC
+//! encoder; the FFmpeg compatibility path still resolves microphones by friendly
+//! name for camera-composited recordings. System audio is captured natively from
+//! the default render endpoint through CPAL/WASAPI into a temporary floating-point
+//! WAV track, which the recording finalizer mixes into the MP4.
 
 use crate::recording::types::MicrophoneInfo;
-use anyhow::{anyhow, Context, Result};
+use anyhow::Result;
+#[cfg(not(windows))]
+use anyhow::anyhow;
 use std::path::Path;
 
 #[cfg(windows)]
