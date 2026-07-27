@@ -66,8 +66,17 @@ function LibraryPage() {
               params={{ id: r.id }}
               className="group overflow-hidden rounded-xl border border-border bg-surface transition-all hover:border-border-strong hover:shadow-[var(--shadow-soft)]"
             >
-              <div className="flex aspect-video items-center justify-center bg-[var(--gradient-surface)] text-muted-foreground">
-                <Film className="size-8 opacity-40" />
+              <div className="flex aspect-video items-center justify-center overflow-hidden bg-[var(--gradient-surface)] text-muted-foreground">
+                {r.thumbnailDataUrl ? (
+                  <img
+                    src={r.thumbnailDataUrl}
+                    alt=""
+                    loading="lazy"
+                    className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                  />
+                ) : (
+                  <Film className="size-8 opacity-40" />
+                )}
               </div>
               <div className="p-4">
                 <div className="truncate text-sm font-medium">{r.title}</div>
