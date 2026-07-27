@@ -35,11 +35,16 @@ windows = { version = "0.61", features = [
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
 ] }
-# CPAL uses WASAPI on Windows. We capture the default render endpoint through
-# its loopback-capable input stream and write a temporary PCM track per segment.
+# windows-capture 2.0 uses windows 0.62.2 internally. Keep an explicit alias to
+# that exact package for D3D11 resource types that cross the windows-capture
+# Frame boundary; the app's existing Win32 enumeration code can remain on 0.61.
+windows_capture_windows = { package = "windows", version = "0.62.2", features = [
+    "Win32_Graphics_Direct3D11",
+] }
+# CPAL uses WASAPI on Windows. We capture microphone/render streams natively and
+# feed PCM into the Windows encoder/mixer.
 cpal = "0.15"
 hound = "3.5"
 # MIT-licensed wrapper over Windows.Graphics.Capture + D3D11. It gives us real
-# HWND/HMONITOR capture, fixing the gdigrab white-window problem while keeping
-# our own recorder orchestration/encoding pipeline closed-source compatible.
+# HWND/HMONITOR capture while our recorder orchestration stays independent.
 windows-capture = "2.0"
