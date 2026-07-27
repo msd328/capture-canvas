@@ -68,6 +68,16 @@ fn encoder_list() -> String {
     text
 }
 
+fn h264_pixel_format(encoder: &str) -> &'static str {
+    match encoder {
+        // Intel Quick Sync's H.264 encoder uses NV12 surfaces. Explicitly
+        // request NV12 so FFmpeg does not have to auto-correct yuv420p and emit
+        // an "Incompatible pixel format" warning on every recording.
+        "h264_qsv" => "nv12",
+        _ => "yuv420p",
+    }
+}
+
 fn probe_encoder(name: &str) -> bool {
     #[cfg(windows)]
     let null_sink = "NUL";
@@ -88,6 +98,8 @@ fn probe_encoder(name: &str) -> bool {
             "-an",
             "-c:v",
             name,
+            "-pix_fmt",
+            h264_pixel_format(name),
             "-f",
             "null",
             null_sink,
@@ -117,7 +129,7 @@ pub fn selected_h264_encoder() -> &'static str {
 }
 
 pub fn apply_h264_options(cmd: &mut Command, encoder: &str) {
-    cmd.args(["-c:v", encoder, "-pix_fmt", "yuv420p"]);
+    cmd.args(["-c:v", encoder, "-pix_fmt", h264_pixel_format(encoder)]);
     match encoder {
         "libx264" => {
             cmd.args(["-preset", "veryfast", "-crf", "23"]);
