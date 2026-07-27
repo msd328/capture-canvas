@@ -6,9 +6,15 @@ use anyhow::{anyhow, Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, Stream, StreamConfig};
 use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 use windows_capture::capture::{CaptureControl, Context as CaptureContext, GraphicsCaptureApiHandler};
 use windows_capture::encoder::{
     AudioSettingsBuilder, ContainerSettingsBuilder, VideoEncoder, VideoSettingsBuilder,
@@ -23,16 +29,27 @@ use windows_capture::settings::{
 };
 use windows_capture::window::Window;
 
+const MIX_SAMPLE_RATE: u32 = 48_000;
+const MIX_CHANNELS: u32 = 2;
+const MIX_CHUNK_FRAMES: usize = 480; // 10 ms at 48 kHz.
+const MAX_MIX_QUEUE_FRAMES: usize = 96_000; // Bound each source to two seconds.
+
 #[derive(Clone, Copy)]
 struct AudioSpec {
     sample_rate: u32,
     channels: u32,
 }
 
+const MIX_AUDIO_SPEC: AudioSpec = AudioSpec {
+    sample_rate: MIX_SAMPLE_RATE,
+    channels: MIX_CHANNELS,
+};
+
 #[derive(Clone, Copy)]
 enum NativeAudioSource {
     Microphone,
     System,
+    Mixed,
 }
 
 impl NativeAudioSource {
@@ -40,6 +57,7 @@ impl NativeAudioSource {
         match self {
             Self::Microphone => "microphone",
             Self::System => "system audio",
+            Self::Mixed => "mixed microphone/system audio",
         }
     }
 }
@@ -53,6 +71,7 @@ struct AudioInput {
 }
 
 type CameraFrameSlot = Arc<Mutex<Option<Vec<u8>>>>;
+type AudioFrameQueue = Arc<Mutex<VecDeque<[f32; 2]>>>;
 
 #[derive(Clone)]
 struct GpuFlags {
@@ -119,11 +138,8 @@ impl GpuFrameEncoder {
             return Ok(());
         }
 
-        // Create a tiny GPU texture matching WGC's BGRA format, upload the latest
-        // 320x180 webcam frame, then copy it directly into the captured texture.
-        // The full screen remains on the GPU; only the small webcam frame crosses
-        // CPU memory. CopySubresourceRegion performs no scaling/blending, so FFmpeg
-        // has already normalized the camera to the final overlay dimensions.
+        // The full screen remains on the GPU. Only the small normalized webcam
+        // frame crosses CPU memory before being copied into the capture texture.
         let mut desc = *frame.desc();
         desc.Width = camera_width;
         desc.Height = camera_height;
@@ -166,8 +182,6 @@ impl GpuFrameEncoder {
                 0,
                 None,
             );
-            // The encoder consumes the same D3D surface asynchronously. Flush the
-            // small overlay copy so the camera update is ordered before submission.
             frame.device_context().Flush();
         }
         Ok(())
@@ -349,16 +363,16 @@ fn submit_audio_pcm<T: Copy>(
     }
 }
 
-struct NativeAudioCapture {
+struct NativeSingleAudioCapture {
     stream: Stream,
     error_state: Arc<Mutex<Option<String>>>,
 }
 
 // CPAL's WASAPI stream is owned and stopped exclusively by the recording
 // session. It never escapes the recorder state except behind this wrapper.
-unsafe impl Send for NativeAudioCapture {}
+unsafe impl Send for NativeSingleAudioCapture {}
 
-impl NativeAudioCapture {
+impl NativeSingleAudioCapture {
     fn stop(self) -> Result<()> {
         let Self { stream, error_state } = self;
         let _ = stream.pause();
@@ -373,7 +387,7 @@ impl NativeAudioCapture {
 fn start_audio_capture(
     input: AudioInput,
     callback: Arc<Mutex<GpuFrameEncoder>>,
-) -> Result<NativeAudioCapture> {
+) -> Result<NativeSingleAudioCapture> {
     let source = input.source;
     let source_label = source.label();
     let error_state = Arc::new(Mutex::new(None::<String>));
@@ -454,7 +468,307 @@ fn start_audio_capture(
     stream
         .play()
         .with_context(|| format!("Unable to start native Windows {source_label} capture"))?;
-    Ok(NativeAudioCapture { stream, error_state })
+    Ok(NativeSingleAudioCapture { stream, error_state })
+}
+
+struct StereoResampler {
+    input_rate: f64,
+    channels: usize,
+    next_position: f64,
+    previous: Option<[f32; 2]>,
+}
+
+impl StereoResampler {
+    fn new(config: &StreamConfig) -> Self {
+        Self {
+            input_rate: f64::from(config.sample_rate.0),
+            channels: usize::from(config.channels),
+            next_position: 0.0,
+            previous: None,
+        }
+    }
+
+    fn push<T: Copy>(
+        &mut self,
+        samples: &[T],
+        convert: impl Fn(T) -> f32,
+        queue: &AudioFrameQueue,
+    ) {
+        if self.channels == 0 {
+            return;
+        }
+
+        let mut frames = Vec::<[f32; 2]>::with_capacity(samples.len() / self.channels + 1);
+        if let Some(previous) = self.previous {
+            frames.push(previous);
+        }
+        for frame in samples.chunks_exact(self.channels) {
+            let left = convert(frame[0]).clamp(-1.0, 1.0);
+            let right = if self.channels == 1 {
+                left
+            } else {
+                convert(frame[1]).clamp(-1.0, 1.0)
+            };
+            frames.push([left, right]);
+        }
+
+        if frames.is_empty() {
+            return;
+        }
+        if frames.len() == 1 {
+            self.previous = frames.last().copied();
+            return;
+        }
+
+        let step = self.input_rate / f64::from(MIX_SAMPLE_RATE);
+        let mut position = self.next_position;
+        let mut output = Vec::<[f32; 2]>::new();
+        while position + 1.0 < frames.len() as f64 {
+            let index = position.floor() as usize;
+            let fraction = (position - index as f64) as f32;
+            let a = frames[index];
+            let b = frames[index + 1];
+            output.push([
+                a[0] + (b[0] - a[0]) * fraction,
+                a[1] + (b[1] - a[1]) * fraction,
+            ]);
+            position += step;
+        }
+
+        position -= (frames.len() - 1) as f64;
+        self.next_position = position.max(0.0);
+        self.previous = frames.last().copied();
+
+        if output.is_empty() {
+            return;
+        }
+        let mut queue = queue.lock();
+        queue.extend(output);
+        while queue.len() > MAX_MIX_QUEUE_FRAMES {
+            queue.pop_front();
+        }
+    }
+}
+
+fn build_resampled_stream(
+    input: AudioInput,
+    queue: AudioFrameQueue,
+    error_state: Arc<Mutex<Option<String>>>,
+) -> Result<Stream> {
+    let source_label = input.source.label();
+    let stream_error_state = error_state.clone();
+    let error_callback = move |error| {
+        eprintln!("Native {source_label} stream error: {error}");
+        let mut state = stream_error_state.lock();
+        if state.is_none() {
+            *state = Some(format!("Native {source_label} stream error: {error}"));
+        }
+    };
+
+    let stream = match input.sample_format {
+        SampleFormat::F32 => {
+            let mut resampler = StereoResampler::new(&input.config);
+            let sink = queue.clone();
+            input.device.build_input_stream(
+                &input.config,
+                move |data: &[f32], _| resampler.push(data, |v| v, &sink),
+                error_callback,
+                None,
+            )
+        }
+        SampleFormat::I16 => {
+            let mut resampler = StereoResampler::new(&input.config);
+            let sink = queue.clone();
+            input.device.build_input_stream(
+                &input.config,
+                move |data: &[i16], _| resampler.push(data, |v| v as f32 / i16::MAX as f32, &sink),
+                error_callback,
+                None,
+            )
+        }
+        SampleFormat::U16 => {
+            let mut resampler = StereoResampler::new(&input.config);
+            let sink = queue.clone();
+            input.device.build_input_stream(
+                &input.config,
+                move |data: &[u16], _| {
+                    resampler.push(data, |v| (v as f32 / u16::MAX as f32) * 2.0 - 1.0, &sink)
+                },
+                error_callback,
+                None,
+            )
+        }
+        SampleFormat::I32 => {
+            let mut resampler = StereoResampler::new(&input.config);
+            let sink = queue.clone();
+            input.device.build_input_stream(
+                &input.config,
+                move |data: &[i32], _| resampler.push(data, |v| v as f32 / i32::MAX as f32, &sink),
+                error_callback,
+                None,
+            )
+        }
+        SampleFormat::F64 => {
+            let mut resampler = StereoResampler::new(&input.config);
+            let sink = queue.clone();
+            input.device.build_input_stream(
+                &input.config,
+                move |data: &[f64], _| resampler.push(data, |v| v as f32, &sink),
+                error_callback,
+                None,
+            )
+        }
+        other => return Err(anyhow!("Unsupported native {source_label} sample format: {other:?}")),
+    }
+    .with_context(|| format!("Unable to create native Windows {source_label} stream for mixing"))?;
+
+    Ok(stream)
+}
+
+fn drain_mix_chunk(queue: &AudioFrameQueue) -> Vec<[f32; 2]> {
+    let mut queue = queue.lock();
+    let mut chunk = Vec::with_capacity(MIX_CHUNK_FRAMES);
+    for _ in 0..MIX_CHUNK_FRAMES {
+        chunk.push(queue.pop_front().unwrap_or([0.0, 0.0]));
+    }
+    chunk
+}
+
+fn start_mixer_thread(
+    callback: Arc<Mutex<GpuFrameEncoder>>,
+    microphone_queue: AudioFrameQueue,
+    system_queue: AudioFrameQueue,
+    stop: Arc<AtomicBool>,
+    error_state: Arc<Mutex<Option<String>>>,
+) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let period = Duration::from_millis(10);
+        let mut next_tick = Instant::now();
+
+        while !stop.load(Ordering::Acquire) {
+            let microphone = drain_mix_chunk(&microphone_queue);
+            let system = drain_mix_chunk(&system_queue);
+            let mut pcm = Vec::with_capacity(MIX_CHUNK_FRAMES * MIX_CHANNELS as usize * 2);
+
+            for index in 0..MIX_CHUNK_FRAMES {
+                // Preserve useful headroom when both sources are loud. A single
+                // source at normal speech/media levels remains close to its input.
+                let left = (microphone[index][0] * 0.8 + system[index][0] * 0.8)
+                    .clamp(-1.0, 1.0);
+                let right = (microphone[index][1] * 0.8 + system[index][1] * 0.8)
+                    .clamp(-1.0, 1.0);
+                pcm.extend_from_slice(&((left * i16::MAX as f32).round() as i16).to_le_bytes());
+                pcm.extend_from_slice(&((right * i16::MAX as f32).round() as i16).to_le_bytes());
+            }
+
+            if let Err(error) = callback
+                .lock()
+                .send_audio_pcm(&pcm, NativeAudioSource::Mixed)
+            {
+                let mut state = error_state.lock();
+                if state.is_none() {
+                    *state = Some(error);
+                }
+                break;
+            }
+
+            next_tick += period;
+            let now = Instant::now();
+            if next_tick > now {
+                thread::sleep(next_tick - now);
+            } else {
+                // Do not burst old audio chunks to catch up after a scheduler stall.
+                next_tick = now;
+            }
+        }
+    })
+}
+
+struct NativeMixedAudioCapture {
+    streams: Vec<Stream>,
+    stop: Arc<AtomicBool>,
+    mixer_thread: Option<JoinHandle<()>>,
+    error_state: Arc<Mutex<Option<String>>>,
+}
+
+unsafe impl Send for NativeMixedAudioCapture {}
+
+impl NativeMixedAudioCapture {
+    fn stop(mut self) -> Result<()> {
+        for stream in &self.streams {
+            let _ = stream.pause();
+        }
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.mixer_thread.take() {
+            if thread.join().is_err() {
+                return Err(anyhow!("Native microphone/system mixer thread panicked"));
+            }
+        }
+        self.streams.clear();
+        if let Some(error) = self.error_state.lock().take() {
+            return Err(anyhow!(error));
+        }
+        Ok(())
+    }
+}
+
+fn start_mixed_audio_capture(
+    microphone: AudioInput,
+    system: AudioInput,
+    callback: Arc<Mutex<GpuFrameEncoder>>,
+) -> Result<NativeMixedAudioCapture> {
+    let microphone_queue: AudioFrameQueue = Arc::new(Mutex::new(VecDeque::new()));
+    let system_queue: AudioFrameQueue = Arc::new(Mutex::new(VecDeque::new()));
+    let error_state = Arc::new(Mutex::new(None::<String>));
+
+    let microphone_stream = build_resampled_stream(
+        microphone,
+        microphone_queue.clone(),
+        error_state.clone(),
+    )?;
+    let system_stream = build_resampled_stream(
+        system,
+        system_queue.clone(),
+        error_state.clone(),
+    )?;
+
+    microphone_stream
+        .play()
+        .context("Unable to start microphone stream for native audio mixing")?;
+    if let Err(error) = system_stream.play() {
+        let _ = microphone_stream.pause();
+        return Err(error).context("Unable to start system-audio stream for native audio mixing");
+    }
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let mixer_thread = start_mixer_thread(
+        callback,
+        microphone_queue,
+        system_queue,
+        stop.clone(),
+        error_state.clone(),
+    );
+
+    Ok(NativeMixedAudioCapture {
+        streams: vec![microphone_stream, system_stream],
+        stop,
+        mixer_thread: Some(mixer_thread),
+        error_state,
+    })
+}
+
+enum NativeAudioCapture {
+    Single(NativeSingleAudioCapture),
+    Mixed(NativeMixedAudioCapture),
+}
+
+impl NativeAudioCapture {
+    fn stop(self) -> Result<()> {
+        match self {
+            Self::Single(capture) => capture.stop(),
+            Self::Mixed(capture) => capture.stop(),
+        }
+    }
 }
 
 pub struct NativeGpuVideoCapture {
@@ -511,23 +825,23 @@ fn start_item<T>(
 where
     T: TryInto<GraphicsCaptureItemType> + Send + 'static,
 {
-    // The encoder exposes one PCM input. Until the native resampler/mixer lands,
-    // microphone + system-audio together stays on the external compatibility path.
-    if config.system_audio && config.microphone_id.is_some() {
-        return Err(anyhow!(
-            "Native microphone + system-audio mixing is not available yet"
-        ));
-    }
-
-    let audio_input = if let Some(id) = config.microphone_id.as_deref() {
-        Some(resolve_microphone_input(id)?)
-    } else if config.system_audio {
+    let microphone_input = config
+        .microphone_id
+        .as_deref()
+        .map(resolve_microphone_input)
+        .transpose()?;
+    let system_input = if config.system_audio {
         Some(resolve_system_audio_input()?)
     } else {
         None
     };
-    let audio_spec = audio_input.as_ref().map(|input| input.spec);
-    let captures_system_audio = config.system_audio && config.microphone_id.is_none();
+
+    let audio_spec = match (&microphone_input, &system_input) {
+        (Some(_), Some(_)) => Some(MIX_AUDIO_SPEC),
+        (Some(input), None) | (None, Some(input)) => Some(input.spec),
+        (None, None) => None,
+    };
+    let captures_system_audio = system_input.is_some();
 
     let camera_frame: Option<CameraFrameSlot> = config
         .camera_id
@@ -572,21 +886,31 @@ where
         None
     };
 
-    let audio_capture = if let Some(input) = audio_input {
-        let callback = control.callback();
-        match start_audio_capture(input, callback.clone()) {
-            Ok(audio) => Some(audio),
-            Err(error) => {
-                if let Some(camera) = camera_capture.take() {
-                    let _ = camera.stop();
-                }
-                let _ = control.stop();
-                let _ = callback.lock().finish();
-                return Err(error.context("Unable to attach audio to native Windows encoder"));
+    let callback = control.callback();
+    let audio_result: Result<Option<NativeAudioCapture>> = match (microphone_input, system_input) {
+        (Some(microphone), Some(system)) => start_mixed_audio_capture(
+            microphone,
+            system,
+            callback.clone(),
+        )
+        .map(NativeAudioCapture::Mixed)
+        .map(Some),
+        (Some(input), None) | (None, Some(input)) => start_audio_capture(input, callback.clone())
+            .map(NativeAudioCapture::Single)
+            .map(Some),
+        (None, None) => Ok(None),
+    };
+
+    let audio_capture = match audio_result {
+        Ok(capture) => capture,
+        Err(error) => {
+            if let Some(camera) = camera_capture.take() {
+                let _ = camera.stop();
             }
+            let _ = control.stop();
+            let _ = callback.lock().finish();
+            return Err(error.context("Unable to attach audio to native Windows encoder"));
         }
-    } else {
-        None
     };
 
     Ok(NativeGpuVideoCapture {
