@@ -2,10 +2,10 @@
 //!
 //! Win32 remains responsible for enumerating and resolving selectable sources.
 //! Actual Windows recording frames come from Windows.Graphics.Capture/D3D11.
-//! The preferred path keeps screen video on D3D11, can attach either microphone
-//! or system-audio PCM to the native Windows H.264/AAC encoder, and composites a
-//! small webcam frame directly onto the capture texture. Only combined mic+system
-//! mixing still uses the full FFmpeg compatibility backend.
+//! The preferred path keeps screen video on D3D11, can mix microphone + system
+//! audio into one native AAC track, and composites the webcam directly onto the
+//! capture texture. FFmpeg remains only as a compatibility fallback when native
+//! Windows capture/encoding cannot be initialized.
 
 use crate::recording::types::{CaptureKind, CaptureTarget, DisplayInfo, WindowInfo};
 use anyhow::Result;
@@ -46,39 +46,38 @@ pub fn start_native_video_capture(
     height: u32,
     output_path: &std::path::Path,
 ) -> Result<NativeVideoCapture> {
-    // The native encoder currently exposes one PCM stream. Camera no longer
-    // disqualifies the GPU path; only simultaneous mic + system audio needs the
-    // compatibility mixer until the native resampler/mixer is implemented.
-    let native_gpu_eligible = !(config.system_audio && config.microphone_id.is_some());
+    match wgc_gpu::start_native_gpu_video_capture(config, target, width, height, output_path) {
+        Ok(capture) => {
+            let camera = config.camera_id.is_some();
+            let microphone = config.microphone_id.is_some();
+            let system_audio = config.system_audio;
 
-    if native_gpu_eligible {
-        match wgc_gpu::start_native_gpu_video_capture(config, target, width, height, output_path) {
-            Ok(capture) => {
-                let camera = config.camera_id.is_some();
-                if camera && config.system_audio {
-                    eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera + system-audio active");
-                } else if camera && config.microphone_id.is_some() {
-                    eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera + microphone active");
-                } else if camera {
-                    eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera active");
-                } else if config.system_audio {
-                    eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 + system-audio encoder active");
-                } else if config.microphone_id.is_some() {
-                    eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 + microphone encoder active");
-                } else {
-                    eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 encoder active");
-                }
-                return Ok(NativeVideoCapture::Gpu(capture));
+            if camera && microphone && system_audio {
+                eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera + mixed microphone/system-audio active");
+            } else if microphone && system_audio {
+                eprintln!("[Recorder] Native WGC/D3D11 H.264 + mixed microphone/system-audio active");
+            } else if camera && system_audio {
+                eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera + system-audio active");
+            } else if camera && microphone {
+                eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera + microphone active");
+            } else if camera {
+                eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera active");
+            } else if system_audio {
+                eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 + system-audio encoder active");
+            } else if microphone {
+                eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 + microphone encoder active");
+            } else {
+                eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 encoder active");
             }
-            Err(native_error) => {
-                eprintln!(
-                    "[Recorder] Native Windows encoder unavailable ({native_error}); falling back to FFmpeg"
-                );
-                // VideoEncoder may create the destination before a later Windows
-                // transcoder initialization error. Clear a partial file before the
-                // fallback process opens the same segment path.
-                let _ = std::fs::remove_file(output_path);
-            }
+            return Ok(NativeVideoCapture::Gpu(capture));
+        }
+        Err(native_error) => {
+            eprintln!(
+                "[Recorder] Native Windows encoder unavailable ({native_error}); falling back to FFmpeg"
+            );
+            // Native MediaTranscoder setup can create the destination before a
+            // later initialization error. Clear a partial file before fallback.
+            let _ = std::fs::remove_file(output_path);
         }
     }
 
