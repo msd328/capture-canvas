@@ -2,10 +2,10 @@
 //!
 //! Win32 remains responsible for enumerating and resolving selectable sources.
 //! Actual Windows recording frames come from Windows.Graphics.Capture/D3D11.
-//! The preferred path keeps screen video on D3D11 and can attach either microphone
-//! PCM or system-audio PCM directly to the native Windows H.264/AAC encoder. Camera
-//! composition and combined mic+system mixing remain on the FFmpeg compatibility
-//! backend until native GPU composition/resampling is complete.
+//! The preferred path keeps screen video on D3D11, can attach either microphone
+//! or system-audio PCM to the native Windows H.264/AAC encoder, and composites a
+//! small webcam frame directly onto the capture texture. Only combined mic+system
+//! mixing still uses the full FFmpeg compatibility backend.
 
 use crate::recording::types::{CaptureKind, CaptureTarget, DisplayInfo, WindowInfo};
 use anyhow::Result;
@@ -46,16 +46,22 @@ pub fn start_native_video_capture(
     height: u32,
     output_path: &std::path::Path,
 ) -> Result<NativeVideoCapture> {
-    // Camera overlay still depends on the established FFmpeg filter path. The
-    // native encoder exposes one PCM stream, so mic-only and system-only stay
-    // native while mic+system uses the compatibility mixer for now.
-    let native_gpu_eligible = config.camera_id.is_none()
-        && !(config.system_audio && config.microphone_id.is_some());
+    // The native encoder currently exposes one PCM stream. Camera no longer
+    // disqualifies the GPU path; only simultaneous mic + system audio needs the
+    // compatibility mixer until the native resampler/mixer is implemented.
+    let native_gpu_eligible = !(config.system_audio && config.microphone_id.is_some());
 
     if native_gpu_eligible {
         match wgc_gpu::start_native_gpu_video_capture(config, target, width, height, output_path) {
             Ok(capture) => {
-                if config.system_audio {
+                let camera = config.camera_id.is_some();
+                if camera && config.system_audio {
+                    eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera + system-audio active");
+                } else if camera && config.microphone_id.is_some() {
+                    eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera + microphone active");
+                } else if camera {
+                    eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera active");
+                } else if config.system_audio {
                     eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 + system-audio encoder active");
                 } else if config.microphone_id.is_some() {
                     eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 + microphone encoder active");
