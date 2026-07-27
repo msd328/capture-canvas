@@ -1,12 +1,15 @@
 //! Recording engine surface.
 //!
 //! Windows display/window frames come from Windows.Graphics.Capture/D3D11. The
-//! preferred path encodes D3D11 surfaces through the native Windows H.264 encoder
-//! and can carry either microphone or system audio directly. FFmpeg remains a
-//! compatibility/finalization tool for camera composition, combined mic+system
-//! mixing, and multi-segment pause/resume concatenation.
+//! preferred path encodes D3D11 surfaces through the native Windows H.264 encoder,
+//! mixes microphone/system audio natively, and can composite the webcam on-GPU.
+//! Windows MediaComposition is the primary multi-segment pause/resume finalizer;
+//! FFmpeg remains only as a compatibility fallback and best-effort thumbnail tool.
 
 pub mod types;
+
+#[cfg(windows)]
+mod windows_media;
 
 use crate::{audio, capture, encoding};
 use anyhow::{anyhow, Context, Result};
@@ -73,15 +76,15 @@ impl RecordingEngine {
         let video = capture::start_native_video_capture(&config, &config.target, width, height, &first_segment)?;
         let external_system_audio = config.system_audio && !video.captures_system_audio();
 
-        // Native system-only recordings already carry AAC inside the segment. The
-        // external WAV + FFmpeg mixer is only needed when the selected backend does
-        // not own system audio (currently camera and combined mic+system cases).
+        // The preferred GPU backend owns system audio itself. An external WAV is
+        // needed only when native capture/encoding failed and the compatibility
+        // video backend took over.
         let (current_system_audio, system_audio_paths) = if external_system_audio {
             if let Err(error) = encoding::ensure_ffmpeg_available() {
                 let _ = video.stop();
                 let _ = fs::remove_file(&first_segment);
                 return Err(error.context(
-                    "This recording configuration requires FFmpeg for system-audio mixing",
+                    "This recording configuration requires FFmpeg for compatibility system-audio mixing",
                 ));
             }
 
@@ -123,14 +126,8 @@ impl RecordingEngine {
             return Ok(());
         }
 
-        // The native encoder writes one self-contained MP4 per active segment. We
-        // still use FFmpeg stream-copy concat for pause/resume, so verify it before
-        // stopping the first segment. A missing FFmpeg installation therefore does
-        // not break ordinary one-shot native recordings.
-        encoding::ensure_ffmpeg_available().context(
-            "Pause/resume currently requires FFmpeg to concatenate recording segments",
-        )?;
-
+        // Each active interval remains a self-contained MP4. Stop/finalization now
+        // prefers Windows MediaComposition, so Pause itself does not require FFmpeg.
         if let Some(system) = rec.current_system_audio.take() {
             system.stop()?;
         }
@@ -362,6 +359,26 @@ fn finalize_segments(segments: &[PathBuf], final_path: &Path) -> Result<()> {
             .with_context(|| format!("Unable to move recording to {}", final_path.display()))?;
         return Ok(());
     }
+
+    #[cfg(windows)]
+    {
+        match windows_media::concatenate_segments(segments, final_path) {
+            Ok(()) => {
+                eprintln!("[Recorder] Native Windows MediaComposition pause/resume finalizer active");
+                return Ok(());
+            }
+            Err(error) => {
+                eprintln!(
+                    "[Recorder] Native Windows pause/resume finalization unavailable ({error}); falling back to FFmpeg concat"
+                );
+                let _ = fs::remove_file(final_path);
+            }
+        }
+    }
+
+    encoding::ensure_ffmpeg_available().context(
+        "Windows native pause/resume finalization failed and FFmpeg fallback is not available",
+    )?;
 
     let list_path = final_path.with_extension("concat.txt");
     let mut body = String::new();
