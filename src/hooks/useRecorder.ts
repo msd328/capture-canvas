@@ -14,6 +14,22 @@ interface UseRecorderResult {
   reset: () => void;
 }
 
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  if (error && typeof error === "object" && "message" in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.trim()) return message;
+  }
+  try {
+    const text = String(error);
+    if (text && text !== "[object Object]") return text;
+  } catch {
+    // Fall through to the user-friendly default.
+  }
+  return fallback;
+}
+
 export function useRecorder(): UseRecorderResult {
   const [status, setStatus] = useState<RecordingStatus>("idle");
   const [countdown, setCountdown] = useState<number | null>(null);
@@ -57,8 +73,12 @@ export function useRecorder(): UseRecorderResult {
       setElapsedMs(0);
       setStatus("recording");
     } catch (e) {
-      setError({ code: "InitFailed", message: (e as Error).message ?? "Failed to start recording" });
-      setStatus("error");
+      const message = errorMessage(e, "Failed to start recording");
+      console.error("Recorder start failed:", e);
+      setError({ code: "InitFailed", message });
+      // Return to idle so a device/setting can be changed and the user can retry
+      // without reloading the whole desktop application.
+      setStatus("idle");
       setCountdown(null);
     }
   }, []);
@@ -87,7 +107,9 @@ export function useRecorder(): UseRecorderResult {
       setElapsedMs(0);
       return out;
     } catch (e) {
-      setError({ code: "EncoderFailed", message: (e as Error).message ?? "Failed to finalize recording" });
+      const message = errorMessage(e, "Failed to finalize recording");
+      console.error("Recorder stop failed:", e);
+      setError({ code: "EncoderFailed", message });
       setStatus("error");
       return null;
     }
