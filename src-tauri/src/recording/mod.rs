@@ -1,10 +1,10 @@
 //! Recording engine surface.
 //!
-//! Windows display/window frames now come from Windows.Graphics.Capture/D3D11.
-//! The WGC backend feeds BGRA frames into the existing FFmpeg H.264 pipeline,
-//! preserving microphone/camera composition while fixing gdigrab white-window
-//! capture. System audio is captured separately through CPAL/WASAPI and mixed
-//! into each pause/resume segment before final concatenation.
+//! Windows display/window frames come from Windows.Graphics.Capture/D3D11. The
+//! preferred path encodes D3D11 surfaces through the native Windows H.264 encoder
+//! and can carry either microphone or system audio directly. FFmpeg remains a
+//! compatibility/finalization tool for camera composition, combined mic+system
+//! mixing, and multi-segment pause/resume concatenation.
 
 pub mod types;
 
@@ -31,6 +31,7 @@ struct ActiveRecording {
     system_audio_paths: Vec<PathBuf>,
     current_video: Option<capture::NativeVideoCapture>,
     current_system_audio: Option<audio::SystemAudioCapture>,
+    external_system_audio: bool,
     width: u32,
     height: u32,
 }
@@ -50,7 +51,6 @@ impl RecordingEngine {
         if guard.is_some() {
             return Err(anyhow!("A recording is already in progress"));
         }
-        encoding::ensure_ffmpeg_available()?;
         if config.system_audio && !audio::system_audio_supported() {
             return Err(anyhow!("Windows has no usable default audio output endpoint for system-audio capture"));
         }
@@ -71,8 +71,20 @@ impl RecordingEngine {
 
         let first_segment = segment_path(&final_path, &id, 0);
         let video = capture::start_native_video_capture(&config, &config.target, width, height, &first_segment)?;
+        let external_system_audio = config.system_audio && !video.captures_system_audio();
 
-        let (current_system_audio, system_audio_paths) = if config.system_audio {
+        // Native system-only recordings already carry AAC inside the segment. The
+        // external WAV + FFmpeg mixer is only needed when the selected backend does
+        // not own system audio (currently camera and combined mic+system cases).
+        let (current_system_audio, system_audio_paths) = if external_system_audio {
+            if let Err(error) = encoding::ensure_ffmpeg_available() {
+                let _ = video.stop();
+                let _ = fs::remove_file(&first_segment);
+                return Err(error.context(
+                    "This recording configuration requires FFmpeg for system-audio mixing",
+                ));
+            }
+
             let path = system_audio_path(&final_path, &id, 0);
             match audio::start_system_audio_capture(&path) {
                 Ok(capture) => (Some(capture), vec![path]),
@@ -97,6 +109,7 @@ impl RecordingEngine {
             system_audio_paths,
             current_video: Some(video),
             current_system_audio,
+            external_system_audio,
             width,
             height,
         });
@@ -109,6 +122,15 @@ impl RecordingEngine {
         if rec.paused_at.is_some() {
             return Ok(());
         }
+
+        // The native encoder writes one self-contained MP4 per active segment. We
+        // still use FFmpeg stream-copy concat for pause/resume, so verify it before
+        // stopping the first segment. A missing FFmpeg installation therefore does
+        // not break ordinary one-shot native recordings.
+        encoding::ensure_ffmpeg_available().context(
+            "Pause/resume currently requires FFmpeg to concatenate recording segments",
+        )?;
+
         if let Some(system) = rec.current_system_audio.take() {
             system.stop()?;
         }
@@ -122,10 +144,9 @@ impl RecordingEngine {
     pub fn resume(&self) -> Result<()> {
         let mut guard = self.active.lock();
         let rec = guard.as_mut().ok_or_else(|| anyhow!("No active recording"))?;
-        let Some(paused_at) = rec.paused_at.take() else {
+        let Some(paused_at) = rec.paused_at else {
             return Ok(());
         };
-        rec.paused_total_ms = rec.paused_total_ms.saturating_add(paused_at.elapsed().as_millis() as u64);
 
         // Resolve again so disconnected monitors/closed windows produce a useful
         // resume error rather than silently continuing against a stale handle.
@@ -145,8 +166,20 @@ impl RecordingEngine {
         let next_index = rec.segment_paths.len();
         let path = segment_path(&rec.final_path, &rec.id, next_index);
         let video = capture::start_native_video_capture(&rec.config, &rec.config.target, rec.width, rec.height, &path)?;
+        let segment_external_system_audio =
+            rec.config.system_audio && !video.captures_system_audio();
 
-        let system_capture = if rec.config.system_audio {
+        // Keep every segment on the same audio ownership model. This prevents a
+        // mid-recording native-encoder fallback from producing incompatible tracks.
+        if segment_external_system_audio != rec.external_system_audio {
+            let _ = video.stop();
+            let _ = fs::remove_file(&path);
+            return Err(anyhow!(
+                "The Windows recording backend changed while paused. Start a new recording so audio routing stays consistent."
+            ));
+        }
+
+        let system_capture = if rec.external_system_audio {
             let system_path = system_audio_path(&rec.final_path, &rec.id, next_index);
             match audio::start_system_audio_capture(&system_path) {
                 Ok(capture) => {
@@ -166,6 +199,10 @@ impl RecordingEngine {
         rec.segment_paths.push(path);
         rec.current_video = Some(video);
         rec.current_system_audio = system_capture;
+        rec.paused_total_ms = rec
+            .paused_total_ms
+            .saturating_add(paused_at.elapsed().as_millis() as u64);
+        rec.paused_at = None;
         Ok(())
     }
 
@@ -186,7 +223,7 @@ impl RecordingEngine {
             .saturating_sub(paused)
             .max(1);
 
-        let final_segments = if rec.config.system_audio {
+        let final_segments = if rec.external_system_audio {
             mix_native_system_audio_segments(
                 &rec.segment_paths,
                 &rec.system_audio_paths,
@@ -203,6 +240,8 @@ impl RecordingEngine {
             return Err(anyhow!("Recording completed but the MP4 file is empty"));
         }
 
+        // Thumbnail generation is best-effort. Native recordings therefore remain
+        // usable even when FFmpeg is intentionally absent from the machine.
         let thumbnail_data_url = encoding::thumbnail_data_url(&rec.final_path);
 
         Ok(RecordingOutput {
@@ -342,9 +381,6 @@ fn finalize_segments(segments: &[PathBuf], final_path: &Path) -> Result<()> {
     let _ = fs::remove_file(&list_path);
     if !status.success() {
         return Err(anyhow!("FFmpeg could not concatenate paused recording segments"));
-    }
-    for segment in segments {
-        let _ = fs::remove_file(segment);
     }
     Ok(())
 }
