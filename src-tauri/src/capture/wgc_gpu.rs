@@ -1,7 +1,14 @@
-use crate::recording::types::{CaptureKind, CaptureTarget, RecordingConfig};
-use anyhow::{anyhow, Result};
+use crate::{
+    audio,
+    recording::types::{CaptureKind, CaptureTarget, RecordingConfig},
+};
+use anyhow::{anyhow, Context, Result};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{Device, SampleFormat, Stream, StreamConfig};
+use parking_lot::Mutex;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use windows_capture::capture::{CaptureControl, Context as CaptureContext, GraphicsCaptureApiHandler};
 use windows_capture::encoder::{
     AudioSettingsBuilder, ContainerSettingsBuilder, VideoEncoder, VideoSettingsBuilder,
@@ -16,12 +23,26 @@ use windows_capture::settings::{
 };
 use windows_capture::window::Window;
 
+#[derive(Clone, Copy)]
+struct MicrophoneSpec {
+    sample_rate: u32,
+    channels: u32,
+}
+
+struct MicrophoneInput {
+    device: Device,
+    config: StreamConfig,
+    sample_format: SampleFormat,
+    spec: MicrophoneSpec,
+}
+
 #[derive(Clone)]
 struct GpuFlags {
     output_path: PathBuf,
     width: u32,
     height: u32,
     fps: u32,
+    microphone: Option<MicrophoneSpec>,
 }
 
 struct GpuFrameEncoder {
@@ -38,6 +59,14 @@ impl GpuFrameEncoder {
         encoder
             .finish()
             .map_err(|error| format!("Unable to finalize native Windows H.264 encoder: {error}"))
+    }
+
+    fn send_microphone_pcm(&mut self, pcm: &[u8]) -> Result<(), String> {
+        self.encoder
+            .as_mut()
+            .ok_or_else(|| "Native Windows encoder is already finalized".to_string())?
+            .send_audio_buffer(pcm, 0)
+            .map_err(|error| format!("Unable to submit microphone PCM to native Windows encoder: {error}"))
     }
 }
 
@@ -59,12 +88,20 @@ impl GraphicsCaptureApiHandler for GpuFrameEncoder {
             bitrate = bitrate.saturating_mul(3) / 2;
         }
 
+        let audio_settings = match ctx.flags.microphone {
+            Some(mic) => AudioSettingsBuilder::new()
+                .sample_rate(mic.sample_rate)
+                .channel_count(mic.channels)
+                .bit_per_sample(16),
+            None => AudioSettingsBuilder::new().disabled(true),
+        };
+
         let encoder = VideoEncoder::new(
             VideoSettingsBuilder::new(ctx.flags.width, ctx.flags.height)
                 .sub_type(VideoSettingsSubType::H264)
                 .bitrate(bitrate)
                 .frame_rate(fps),
-            AudioSettingsBuilder::new().disabled(true),
+            audio_settings,
             ContainerSettingsBuilder::new(),
             &ctx.flags.output_path,
         )
@@ -114,17 +151,201 @@ impl GraphicsCaptureApiHandler for GpuFrameEncoder {
     }
 }
 
+fn resolve_microphone_input(id: &str) -> Result<MicrophoneInput> {
+    let requested_name = audio::resolve_microphone_name(id)
+        .ok_or_else(|| anyhow!("The selected microphone is no longer available"))?;
+    let requested_lower = requested_name.to_lowercase();
+    let host = cpal::default_host();
+    let devices = host
+        .input_devices()
+        .context("Unable to enumerate native Windows microphone devices")?;
+
+    let mut partial_match = None;
+    let mut selected = None;
+    for device in devices {
+        let Ok(name) = device.name() else { continue; };
+        let lower = name.to_lowercase();
+        if lower == requested_lower {
+            selected = Some(device);
+            break;
+        }
+        if partial_match.is_none()
+            && (lower.contains(&requested_lower) || requested_lower.contains(&lower))
+        {
+            partial_match = Some(device);
+        }
+    }
+    let device = selected
+        .or(partial_match)
+        .ok_or_else(|| anyhow!("The selected microphone is not available through Windows audio capture: {requested_name}"))?;
+    let supported = device
+        .default_input_config()
+        .with_context(|| format!("Unable to read microphone format for {requested_name}"))?;
+    let sample_format = supported.sample_format();
+    let config: StreamConfig = supported.into();
+    if config.channels == 0 || config.sample_rate.0 == 0 {
+        return Err(anyhow!("The selected microphone reported an invalid audio format"));
+    }
+
+    Ok(MicrophoneInput {
+        device,
+        spec: MicrophoneSpec {
+            sample_rate: config.sample_rate.0,
+            channels: u32::from(config.channels),
+        },
+        config,
+        sample_format,
+    })
+}
+
+fn encode_pcm_i16<T: Copy>(samples: &[T], convert: impl Fn(T) -> i16) -> Vec<u8> {
+    let mut pcm = Vec::with_capacity(samples.len() * 2);
+    for &sample in samples {
+        pcm.extend_from_slice(&convert(sample).to_le_bytes());
+    }
+    pcm
+}
+
+fn submit_microphone_pcm<T: Copy>(
+    callback: &Arc<Mutex<GpuFrameEncoder>>,
+    error_state: &Arc<Mutex<Option<String>>>,
+    samples: &[T],
+    convert: impl Fn(T) -> i16,
+) {
+    if error_state.lock().is_some() {
+        return;
+    }
+    let pcm = encode_pcm_i16(samples, convert);
+    if let Err(error) = callback.lock().send_microphone_pcm(&pcm) {
+        *error_state.lock() = Some(error);
+    }
+}
+
+struct NativeMicrophoneCapture {
+    stream: Stream,
+    error_state: Arc<Mutex<Option<String>>>,
+}
+
+// CPAL's WASAPI stream is owned and stopped exclusively by the recording
+// session. It never escapes the recorder state except behind this wrapper.
+unsafe impl Send for NativeMicrophoneCapture {}
+
+impl NativeMicrophoneCapture {
+    fn stop(self) -> Result<()> {
+        let Self { stream, error_state } = self;
+        let _ = stream.pause();
+        drop(stream);
+        if let Some(error) = error_state.lock().take() {
+            return Err(anyhow!(error));
+        }
+        Ok(())
+    }
+}
+
+fn start_microphone_capture(
+    input: MicrophoneInput,
+    callback: Arc<Mutex<GpuFrameEncoder>>,
+) -> Result<NativeMicrophoneCapture> {
+    let error_state = Arc::new(Mutex::new(None::<String>));
+    let stream_error_state = error_state.clone();
+    let error_callback = move |error| {
+        eprintln!("Native microphone stream error: {error}");
+        let mut state = stream_error_state.lock();
+        if state.is_none() {
+            *state = Some(format!("Native microphone stream error: {error}"));
+        }
+    };
+
+    let stream = match input.sample_format {
+        SampleFormat::F32 => {
+            let sink = callback.clone();
+            let errors = error_state.clone();
+            input.device.build_input_stream(
+                &input.config,
+                move |data: &[f32], _| {
+                    submit_microphone_pcm(&sink, &errors, data, |v| {
+                        (v.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
+                    })
+                },
+                error_callback,
+                None,
+            )
+        }
+        SampleFormat::I16 => {
+            let sink = callback.clone();
+            let errors = error_state.clone();
+            input.device.build_input_stream(
+                &input.config,
+                move |data: &[i16], _| submit_microphone_pcm(&sink, &errors, data, |v| v),
+                error_callback,
+                None,
+            )
+        }
+        SampleFormat::U16 => {
+            let sink = callback.clone();
+            let errors = error_state.clone();
+            input.device.build_input_stream(
+                &input.config,
+                move |data: &[u16], _| {
+                    submit_microphone_pcm(&sink, &errors, data, |v| (i32::from(v) - 32_768) as i16)
+                },
+                error_callback,
+                None,
+            )
+        }
+        SampleFormat::I32 => {
+            let sink = callback.clone();
+            let errors = error_state.clone();
+            input.device.build_input_stream(
+                &input.config,
+                move |data: &[i32], _| submit_microphone_pcm(&sink, &errors, data, |v| (v >> 16) as i16),
+                error_callback,
+                None,
+            )
+        }
+        SampleFormat::F64 => {
+            let sink = callback.clone();
+            let errors = error_state.clone();
+            input.device.build_input_stream(
+                &input.config,
+                move |data: &[f64], _| {
+                    submit_microphone_pcm(&sink, &errors, data, |v| {
+                        (v.clamp(-1.0, 1.0) * i16::MAX as f64).round() as i16
+                    })
+                },
+                error_callback,
+                None,
+            )
+        }
+        other => return Err(anyhow!("Unsupported native microphone sample format: {other:?}")),
+    }
+    .context("Unable to create native Windows microphone stream")?;
+
+    stream
+        .play()
+        .context("Unable to start native Windows microphone capture")?;
+    Ok(NativeMicrophoneCapture { stream, error_state })
+}
+
 pub struct NativeGpuVideoCapture {
     control: Option<CaptureControl<GpuFrameEncoder, String>>,
+    microphone: Option<NativeMicrophoneCapture>,
 }
 
 impl NativeGpuVideoCapture {
     pub fn stop(mut self) -> Result<()> {
+        // Stop microphone callbacks first so no audio can race with encoder finalization.
+        let microphone_result = match self.microphone.take() {
+            Some(microphone) => microphone.stop(),
+            None => Ok(()),
+        };
+
         let Some(control) = self.control.take() else {
+            microphone_result?;
             return Ok(());
         };
 
-        // Keep a handle to the encoder state, stop WGC so no more frames can arrive,
+        // Keep a handle to the encoder state, stop WGC so no more video frames can arrive,
         // then flush/finalize the MediaTranscoder-backed MP4 encoder.
         let callback = control.callback();
         let capture_result = control
@@ -132,6 +353,7 @@ impl NativeGpuVideoCapture {
             .map_err(|error| anyhow!("Unable to stop Windows Graphics Capture: {error}"));
         let finish_result = callback.lock().finish().map_err(anyhow::Error::msg);
 
+        microphone_result?;
         capture_result?;
         finish_result?;
         Ok(())
@@ -148,6 +370,12 @@ fn start_item<T>(
 where
     T: TryInto<GraphicsCaptureItemType> + Send + 'static,
 {
+    let microphone_input = config
+        .microphone_id
+        .as_deref()
+        .map(resolve_microphone_input)
+        .transpose()?;
+    let microphone_spec = microphone_input.as_ref().map(|input| input.spec);
     let fps = config.fps.clamp(1, 60);
     let settings = Settings::new(
         item,
@@ -162,14 +390,30 @@ where
             width,
             height,
             fps,
+            microphone: microphone_spec,
         },
     );
 
     let control = GpuFrameEncoder::start_free_threaded(settings)
         .map_err(|error| anyhow!("Unable to start native WGC/D3D11 encoder: {error}"))?;
 
+    let microphone = if let Some(input) = microphone_input {
+        let callback = control.callback();
+        match start_microphone_capture(input, callback.clone()) {
+            Ok(microphone) => Some(microphone),
+            Err(error) => {
+                let _ = control.stop();
+                let _ = callback.lock().finish();
+                return Err(error.context("Unable to attach microphone to native Windows encoder"));
+            }
+        }
+    } else {
+        None
+    };
+
     Ok(NativeGpuVideoCapture {
         control: Some(control),
+        microphone,
     })
 }
 
