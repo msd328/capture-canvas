@@ -1,11 +1,16 @@
 //! Screen and window capture.
 //!
-//! Windows Phase 1 uses Win32 for source enumeration and target resolution.
-//! Frame capture itself is driven by the recording backend (FFmpeg/gdigrab for
-//! the first working Windows milestone) so the frontend contract stays stable.
+//! Win32 remains responsible for enumerating and resolving selectable sources.
+//! Actual Windows recording frames now come from Windows.Graphics.Capture/D3D11
+//! through the sibling WGC backend rather than FFmpeg gdigrab.
 
 use crate::recording::types::{CaptureKind, CaptureTarget, DisplayInfo, WindowInfo};
 use anyhow::Result;
+
+#[cfg(windows)]
+mod wgc;
+#[cfg(windows)]
+pub use wgc::{start_native_video_capture, NativeVideoCapture};
 
 #[derive(Debug, Clone)]
 pub struct CaptureSource {
@@ -129,9 +134,7 @@ mod windows_backend {
                 let width = (rect.right - rect.left).max(0) as u32;
                 let height = (rect.bottom - rect.top).max(0) as u32;
                 if width < 2 || height < 2 { return Err(anyhow!("Selected window has an invalid capture size")); }
-                // gdigrab's title target is more reliable across FFmpeg Windows builds than
-                // passing an HWND value directly. Command::arg keeps the title as one argument,
-                // so spaces in the title do not require shell quoting.
+                // Kept only as metadata/debug fallback; real frames now come from WGC via the HWND.
                 Ok(CaptureSource { ffmpeg_input: format!("title={title}"), offset_x: None, offset_y: None, width, height })
             }
         }
