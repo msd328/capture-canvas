@@ -1,5 +1,5 @@
 use crate::{
-    audio,
+    audio, camera,
     recording::types::{CaptureKind, CaptureTarget, RecordingConfig},
 };
 use anyhow::{anyhow, Context, Result};
@@ -52,6 +52,8 @@ struct AudioInput {
     source: NativeAudioSource,
 }
 
+type CameraFrameSlot = Arc<Mutex<Option<Vec<u8>>>>;
+
 #[derive(Clone)]
 struct GpuFlags {
     output_path: PathBuf,
@@ -59,12 +61,14 @@ struct GpuFlags {
     height: u32,
     fps: u32,
     audio: Option<AudioSpec>,
+    camera_frame: Option<CameraFrameSlot>,
 }
 
 struct GpuFrameEncoder {
     encoder: Option<VideoEncoder>,
     frame_interval_hns: i64,
     next_frame_hns: Option<i64>,
+    camera_frame: Option<CameraFrameSlot>,
 }
 
 impl GpuFrameEncoder {
@@ -88,6 +92,85 @@ impl GpuFrameEncoder {
                     source.label()
                 )
             })
+    }
+
+    fn overlay_camera(&self, frame: &mut Frame) -> Result<(), String> {
+        let Some(slot) = self.camera_frame.as_ref() else {
+            return Ok(());
+        };
+        let latest = slot.lock();
+        let Some(bytes) = latest.as_ref() else {
+            return Ok(());
+        };
+
+        let camera_width = camera::OVERLAY_WIDTH;
+        let camera_height = camera::OVERLAY_HEIGHT;
+        let expected = camera_width as usize * camera_height as usize * 4;
+        if bytes.len() != expected {
+            return Err(format!(
+                "Unexpected camera frame size: got {}, expected {expected}",
+                bytes.len()
+            ));
+        }
+
+        // Leave a 24px margin around the webcam rectangle. Very small captured
+        // windows simply skip the overlay rather than corrupting the D3D resource.
+        if frame.width() <= camera_width + 48 || frame.height() <= camera_height + 48 {
+            return Ok(());
+        }
+
+        // Create a tiny GPU texture matching WGC's BGRA format, upload the latest
+        // 320x180 webcam frame, then copy it directly into the captured texture.
+        // The full screen remains on the GPU; only the small webcam frame crosses
+        // CPU memory. CopySubresourceRegion performs no scaling/blending, so FFmpeg
+        // has already normalized the camera to the final overlay dimensions.
+        let mut desc = *frame.desc();
+        desc.Width = camera_width;
+        desc.Height = camera_height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.SampleDesc.Count = 1;
+        desc.SampleDesc.Quality = 0;
+        desc.BindFlags = 0;
+        desc.CPUAccessFlags = 0;
+        desc.MiscFlags = 0;
+
+        let mut camera_texture = None;
+        unsafe {
+            frame
+                .device()
+                .CreateTexture2D(&desc, None, Some(&mut camera_texture))
+                .map_err(|error| format!("Unable to create D3D11 camera overlay texture: {error}"))?;
+        }
+        let camera_texture = camera_texture
+            .ok_or_else(|| "D3D11 did not return a camera overlay texture".to_string())?;
+
+        let dst_x = frame.width() - camera_width - 24;
+        let dst_y = frame.height() - camera_height - 24;
+        unsafe {
+            frame.device_context().UpdateSubresource(
+                &camera_texture,
+                0,
+                None,
+                bytes.as_ptr().cast::<c_void>(),
+                camera_width * 4,
+                0,
+            );
+            frame.device_context().CopySubresourceRegion(
+                frame.as_raw_texture(),
+                0,
+                dst_x,
+                dst_y,
+                0,
+                &camera_texture,
+                0,
+                None,
+            );
+            // The encoder consumes the same D3D surface asynchronously. Flush the
+            // small overlay copy so the camera update is ordered before submission.
+            frame.device_context().Flush();
+        }
+        Ok(())
     }
 }
 
@@ -132,6 +215,7 @@ impl GraphicsCaptureApiHandler for GpuFrameEncoder {
             encoder: Some(encoder),
             frame_interval_hns: (10_000_000i64 / i64::from(fps)).max(1),
             next_frame_hns: None,
+            camera_frame: ctx.flags.camera_frame,
         })
     }
 
@@ -145,8 +229,8 @@ impl GraphicsCaptureApiHandler for GpuFrameEncoder {
             .map_err(|error| format!("Unable to read WGC frame timestamp: {error}"))?
             .Duration;
 
-        // WGC can deliver at the desktop refresh rate. Decimate before the encoder
-        // so a 120/144 Hz display does not create an unbounded queue for a 30/60 fps recording.
+        // WGC can deliver at the desktop refresh rate. Decimate before any camera
+        // upload or encoder work so high-refresh monitors remain bounded.
         if let Some(next) = self.next_frame_hns {
             if timestamp < next {
                 return Ok(());
@@ -159,6 +243,8 @@ impl GraphicsCaptureApiHandler for GpuFrameEncoder {
         } else {
             self.next_frame_hns = Some(timestamp.saturating_add(self.frame_interval_hns));
         }
+
+        self.overlay_camera(frame)?;
 
         self.encoder
             .as_mut()
@@ -374,6 +460,7 @@ fn start_audio_capture(
 pub struct NativeGpuVideoCapture {
     control: Option<CaptureControl<GpuFrameEncoder, String>>,
     audio: Option<NativeAudioCapture>,
+    camera: Option<camera::CameraFrameCapture>,
     captures_system_audio: bool,
 }
 
@@ -383,25 +470,30 @@ impl NativeGpuVideoCapture {
     }
 
     pub fn stop(mut self) -> Result<()> {
-        // Stop audio callbacks first so no PCM can race with encoder finalization.
+        // Stop auxiliary producers before WGC/encoder finalization so neither
+        // webcam frames nor PCM can race with the final MP4 flush.
+        let camera_result = match self.camera.take() {
+            Some(camera) => camera.stop(),
+            None => Ok(()),
+        };
         let audio_result = match self.audio.take() {
             Some(audio) => audio.stop(),
             None => Ok(()),
         };
 
         let Some(control) = self.control.take() else {
+            camera_result?;
             audio_result?;
             return Ok(());
         };
 
-        // Keep a handle to the encoder state, stop WGC so no more video frames can arrive,
-        // then flush/finalize the MediaTranscoder-backed MP4 encoder.
         let callback = control.callback();
         let capture_result = control
             .stop()
             .map_err(|error| anyhow!("Unable to stop Windows Graphics Capture: {error}"));
         let finish_result = callback.lock().finish().map_err(anyhow::Error::msg);
 
+        camera_result?;
         audio_result?;
         capture_result?;
         finish_result?;
@@ -436,6 +528,12 @@ where
     };
     let audio_spec = audio_input.as_ref().map(|input| input.spec);
     let captures_system_audio = config.system_audio && config.microphone_id.is_none();
+
+    let camera_frame: Option<CameraFrameSlot> = config
+        .camera_id
+        .as_ref()
+        .map(|_| Arc::new(Mutex::new(None)));
+
     let fps = config.fps.clamp(1, 60);
     let settings = Settings::new(
         item,
@@ -451,17 +549,37 @@ where
             height,
             fps,
             audio: audio_spec,
+            camera_frame: camera_frame.clone(),
         },
     );
 
     let control = GpuFrameEncoder::start_free_threaded(settings)
         .map_err(|error| anyhow!("Unable to start native WGC/D3D11 encoder: {error}"))?;
 
+    let mut camera_capture = if let (Some(id), Some(slot)) =
+        (config.camera_id.as_deref(), camera_frame)
+    {
+        let callback = control.callback();
+        match camera::start_camera_frame_capture(id, slot) {
+            Ok(camera) => Some(camera),
+            Err(error) => {
+                let _ = control.stop();
+                let _ = callback.lock().finish();
+                return Err(error.context("Unable to attach camera to native D3D11 recording"));
+            }
+        }
+    } else {
+        None
+    };
+
     let audio_capture = if let Some(input) = audio_input {
         let callback = control.callback();
         match start_audio_capture(input, callback.clone()) {
             Ok(audio) => Some(audio),
             Err(error) => {
+                if let Some(camera) = camera_capture.take() {
+                    let _ = camera.stop();
+                }
                 let _ = control.stop();
                 let _ = callback.lock().finish();
                 return Err(error.context("Unable to attach audio to native Windows encoder"));
@@ -474,6 +592,7 @@ where
     Ok(NativeGpuVideoCapture {
         control: Some(control),
         audio: audio_capture,
+        camera: camera_capture,
         captures_system_audio,
     })
 }
