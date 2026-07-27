@@ -48,7 +48,7 @@ impl GraphicsCaptureApiHandler for GpuFrameEncoder {
     fn new(ctx: CaptureContext<Self::Flags>) -> Result<Self, Self::Error> {
         let fps = ctx.flags.fps.clamp(1, 60);
         let pixels = u64::from(ctx.flags.width) * u64::from(ctx.flags.height);
-        let mut bitrate = if pixels <= 1920 * 1200 {
+        let mut bitrate: u32 = if pixels <= 1920 * 1200 {
             12_000_000
         } else if pixels <= 2560 * 1440 {
             20_000_000
