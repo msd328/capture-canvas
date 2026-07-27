@@ -8,13 +8,12 @@
 
 pub mod types;
 
-use crate::{audio, capture};
+use crate::{audio, capture, encoding};
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use parking_lot::Mutex;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Instant;
 use uuid::Uuid;
@@ -51,7 +50,7 @@ impl RecordingEngine {
         if guard.is_some() {
             return Err(anyhow!("A recording is already in progress"));
         }
-        ensure_ffmpeg_available()?;
+        encoding::ensure_ffmpeg_available()?;
         if config.system_audio && !audio::system_audio_supported() {
             return Err(anyhow!("Windows has no usable default audio output endpoint for system-audio capture"));
         }
@@ -204,6 +203,8 @@ impl RecordingEngine {
             return Err(anyhow!("Recording completed but the MP4 file is empty"));
         }
 
+        let thumbnail_data_url = encoding::thumbnail_data_url(&rec.final_path);
+
         Ok(RecordingOutput {
             id: rec.id,
             title: rec.config.title.unwrap_or_else(|| format!("Recording {}", Utc::now().format("%Y-%m-%d %H:%M"))),
@@ -213,22 +214,9 @@ impl RecordingEngine {
             width: rec.width,
             height: rec.height,
             file_size_bytes: metadata.len(),
-            thumbnail_data_url: None,
+            thumbnail_data_url,
         })
     }
-}
-
-fn ensure_ffmpeg_available() -> Result<()> {
-    let status = Command::new("ffmpeg")
-        .arg("-version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map_err(|_| anyhow!("FFmpeg is required but was not found on PATH. Install FFmpeg, restart PowerShell, and try again."))?;
-    if !status.success() {
-        return Err(anyhow!("FFmpeg is installed but could not be started"));
-    }
-    Ok(())
 }
 
 fn output_path_for(id: &str, requested: Option<&str>) -> Result<PathBuf> {
@@ -287,7 +275,7 @@ fn mix_native_system_audio_segments(video_segments: &[PathBuf], system_tracks: &
         }
 
         let output = mixed_segment_path(video);
-        let mut cmd = Command::new("ffmpeg");
+        let mut cmd = encoding::ffmpeg_command();
         cmd.args(["-hide_banner", "-loglevel", "warning", "-y"])
             .arg("-i").arg(video)
             .arg("-i").arg(system);
@@ -344,7 +332,7 @@ fn finalize_segments(segments: &[PathBuf], final_path: &Path) -> Result<()> {
     }
     fs::write(&list_path, body).context("Unable to create FFmpeg concat list")?;
 
-    let status = Command::new("ffmpeg")
+    let status = encoding::ffmpeg_command()
         .args(["-hide_banner", "-loglevel", "warning", "-y", "-f", "concat", "-safe", "0", "-i"])
         .arg(&list_path)
         .args(["-c", "copy", "-movflags", "+faststart"])
