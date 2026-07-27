@@ -305,12 +305,17 @@ where
 {
     let (child, writer) = spawn_ffmpeg(config, width, height, output_path)?;
     let fps = config.fps.clamp(1, 60);
+
+    // Use the platform defaults for optional WGC session properties. Border,
+    // cursor and minimum-update-interval toggles are version-gated Windows APIs;
+    // requesting them explicitly can make capture fail on otherwise-supported
+    // Windows builds. Frame pacing is already handled by FramePipe.
     let settings = Settings::new(
         item,
-        CursorCaptureSettings::WithCursor,
-        DrawBorderSettings::WithoutBorder,
+        CursorCaptureSettings::Default,
+        DrawBorderSettings::Default,
         SecondaryWindowSettings::Default,
-        MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / fps as f64)),
+        MinimumUpdateIntervalSettings::Default,
         DirtyRegionSettings::Default,
         ColorFormat::Bgra8,
         PipeFlags {
