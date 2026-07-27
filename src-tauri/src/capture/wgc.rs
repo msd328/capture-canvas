@@ -1,10 +1,13 @@
-use crate::{audio, camera, recording::types::{CaptureKind, CaptureTarget, RecordingConfig}};
+use crate::{
+    audio, camera, encoding,
+    recording::types::{CaptureKind, CaptureTarget, RecordingConfig},
+};
 use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
 use std::ffi::c_void;
 use std::io::Write;
 use std::path::Path;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -47,7 +50,9 @@ impl FramePipe {
             return Ok(());
         };
         while self.frames_written < target_count {
-            stdin.write_all(frame).map_err(|e| format!("Unable to pipe WGC frame to FFmpeg: {e}"))?;
+            stdin
+                .write_all(frame)
+                .map_err(|e| format!("Unable to pipe WGC frame to FFmpeg: {e}"))?;
             self.frames_written += 1;
         }
         Ok(())
@@ -101,7 +106,9 @@ impl GraphicsCaptureApiHandler for FramePipe {
         }
 
         let buffer = if frame.width() == self.width && frame.height() == self.height {
-            frame.buffer().map_err(|e| format!("Unable to map WGC frame: {e}"))?
+            frame
+                .buffer()
+                .map_err(|e| format!("Unable to map WGC frame: {e}"))?
         } else {
             frame
                 .buffer_crop(0, 0, self.width, self.height)
@@ -112,7 +119,10 @@ impl GraphicsCaptureApiHandler for FramePipe {
         let bytes = buffer.as_nopadding_buffer(&mut self.scratch);
         let expected = self.width as usize * self.height as usize * 4;
         if bytes.len() != expected {
-            return Err(format!("Unexpected WGC frame size: got {}, expected {expected}", bytes.len()));
+            return Err(format!(
+                "Unexpected WGC frame size: got {}, expected {expected}",
+                bytes.len()
+            ));
         }
 
         self.last_frame.clear();
@@ -147,13 +157,18 @@ impl NativeVideoCapture {
                 .lock()
                 .pad_to_now()
                 .map_err(|e| anyhow!(e))?;
-            control.stop().map_err(|e| anyhow!("Unable to stop Windows Graphics Capture: {e}"))?;
+            control
+                .stop()
+                .map_err(|e| anyhow!("Unable to stop Windows Graphics Capture: {e}"))?;
         }
 
         // Closing stdin signals EOF to FFmpeg's rawvideo input so it can flush
         // the H.264/AAC streams and write the MP4 trailer normally.
         self.writer.lock().take();
-        let status = self.child.wait().context("Unable to finalize WGC recording segment")?;
+        let status = self
+            .child
+            .wait()
+            .context("Unable to finalize WGC recording segment")?;
         if !status.success() {
             return Err(anyhow!("FFmpeg could not finalize the WGC recording segment"));
         }
@@ -161,34 +176,43 @@ impl NativeVideoCapture {
     }
 }
 
-fn choose_h264_encoder() -> &'static str {
-    let Ok(output) = Command::new("ffmpeg").args(["-hide_banner", "-encoders"]).output() else {
-        return "libx264";
-    };
-    let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
-    text.push_str(&String::from_utf8_lossy(&output.stderr));
-    if text.contains("h264_mf") { "h264_mf" } else { "libx264" }
-}
-
-fn spawn_ffmpeg(config: &RecordingConfig, width: u32, height: u32, output_path: &Path) -> Result<(Child, Arc<Mutex<Option<ChildStdin>>>)> {
+fn spawn_ffmpeg(
+    config: &RecordingConfig,
+    width: u32,
+    height: u32,
+    output_path: &Path,
+) -> Result<(Child, Arc<Mutex<Option<ChildStdin>>>)> {
     let fps = config.fps.clamp(1, 60).to_string();
     let size = format!("{width}x{height}");
-    let mut cmd = Command::new("ffmpeg");
+    let mut cmd = encoding::ffmpeg_command();
     cmd.args(["-hide_banner", "-loglevel", "warning", "-y"]);
     cmd.args([
-        "-thread_queue_size", "1024",
-        "-f", "rawvideo",
-        "-pixel_format", "bgra",
-        "-video_size", &size,
-        "-framerate", &fps,
-        "-i", "pipe:0",
+        "-thread_queue_size",
+        "1024",
+        "-f",
+        "rawvideo",
+        "-pixel_format",
+        "bgra",
+        "-video_size",
+        &size,
+        "-framerate",
+        &fps,
+        "-i",
+        "pipe:0",
     ]);
 
     let mut next_input = 1usize;
     let mic_input = if let Some(id) = config.microphone_id.as_deref() {
         let name = audio::resolve_microphone_name(id)
             .ok_or_else(|| anyhow!("The selected microphone is no longer available"))?;
-        cmd.args(["-thread_queue_size", "1024", "-f", "dshow", "-i", &format!("audio={name}")]);
+        cmd.args([
+            "-thread_queue_size",
+            "1024",
+            "-f",
+            "dshow",
+            "-i",
+            &format!("audio={name}"),
+        ]);
         let index = next_input;
         next_input += 1;
         Some(index)
@@ -199,7 +223,14 @@ fn spawn_ffmpeg(config: &RecordingConfig, width: u32, height: u32, output_path: 
     let camera_input = if let Some(id) = config.camera_id.as_deref() {
         let name = camera::resolve_camera_name(id)
             .ok_or_else(|| anyhow!("The selected camera is no longer available"))?;
-        cmd.args(["-thread_queue_size", "1024", "-f", "dshow", "-i", &format!("video={name}")]);
+        cmd.args([
+            "-thread_queue_size",
+            "1024",
+            "-f",
+            "dshow",
+            "-i",
+            &format!("video={name}"),
+        ]);
         Some(next_input)
     } else {
         None
@@ -211,41 +242,64 @@ fn spawn_ffmpeg(config: &RecordingConfig, width: u32, height: u32, output_path: 
         );
         cmd.args(["-filter_complex", &filter, "-map", "[v]"]);
     } else {
-        cmd.args(["-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2", "-map", "0:v:0"]);
+        cmd.args([
+            "-vf",
+            "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+            "-map",
+            "0:v:0",
+        ]);
     }
 
     if let Some(index) = mic_input {
-        cmd.args(["-map", &format!("{index}:a:0"), "-c:a", "aac", "-b:a", "160k"]);
+        cmd.args([
+            "-map",
+            &format!("{index}:a:0"),
+            "-c:a",
+            "aac",
+            "-b:a",
+            "160k",
+        ]);
     } else {
         cmd.arg("-an");
     }
 
-    let encoder = choose_h264_encoder();
-    cmd.args(["-c:v", encoder, "-pix_fmt", "yuv420p"]);
-    if encoder == "libx264" {
-        cmd.args(["-preset", "veryfast", "-crf", "23"]);
-    } else {
-        cmd.args(["-b:v", "6000k"]);
-    }
+    let encoder = encoding::selected_h264_encoder();
+    encoding::apply_h264_options(&mut cmd, encoder);
     cmd.args(["-r", &fps, "-movflags", "+faststart"]);
     cmd.arg(output_path);
-    cmd.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::inherit());
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit());
 
-    let mut child = cmd.spawn().context("Unable to start FFmpeg for Windows Graphics Capture")?;
-    let stdin = child.stdin.take().ok_or_else(|| anyhow!("FFmpeg rawvideo stdin was not available"))?;
+    let mut child = cmd
+        .spawn()
+        .context("Unable to start FFmpeg for Windows Graphics Capture")?;
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| anyhow!("FFmpeg rawvideo stdin was not available"))?;
     let writer = Arc::new(Mutex::new(Some(stdin)));
 
     thread::sleep(Duration::from_millis(250));
     if let Some(status) = child.try_wait().context("Unable to inspect FFmpeg process")? {
         return Err(anyhow!(
             "FFmpeg stopped while starting WGC recording (exit code {})",
-            status.code().map(|v| v.to_string()).unwrap_or_else(|| "unknown".into())
+            status
+                .code()
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "unknown".into())
         ));
     }
     Ok((child, writer))
 }
 
-fn start_item<T>(item: T, config: &RecordingConfig, width: u32, height: u32, output_path: &Path) -> Result<NativeVideoCapture>
+fn start_item<T>(
+    item: T,
+    config: &RecordingConfig,
+    width: u32,
+    height: u32,
+    output_path: &Path,
+) -> Result<NativeVideoCapture>
 where
     T: TryInto<GraphicsCaptureItemType> + Send + 'static,
 {
@@ -259,7 +313,12 @@ where
         MinimumUpdateIntervalSettings::Custom(Duration::from_secs_f64(1.0 / fps as f64)),
         DirtyRegionSettings::Default,
         ColorFormat::Bgra8,
-        PipeFlags { writer: writer.clone(), width, height, fps },
+        PipeFlags {
+            writer: writer.clone(),
+            width,
+            height,
+            fps,
+        },
     );
 
     let control = match FramePipe::start_free_threaded(settings) {
@@ -273,7 +332,11 @@ where
         }
     };
 
-    Ok(NativeVideoCapture { control: Some(control), writer, child })
+    Ok(NativeVideoCapture {
+        control: Some(control),
+        writer,
+        child,
+    })
 }
 
 pub fn start_native_video_capture(
@@ -285,13 +348,19 @@ pub fn start_native_video_capture(
 ) -> Result<NativeVideoCapture> {
     match target.kind {
         CaptureKind::Display => {
-            let raw = target.id.strip_prefix("monitor-").ok_or_else(|| anyhow!("Invalid monitor id"))?;
+            let raw = target
+                .id
+                .strip_prefix("monitor-")
+                .ok_or_else(|| anyhow!("Invalid monitor id"))?;
             let handle = usize::from_str_radix(raw, 16).map_err(|_| anyhow!("Invalid monitor id"))?;
             let monitor = Monitor::from_raw_hmonitor(handle as *mut c_void);
             start_item(monitor, config, width, height, output_path)
         }
         CaptureKind::Window => {
-            let raw = target.id.strip_prefix("window-").ok_or_else(|| anyhow!("Invalid window id"))?;
+            let raw = target
+                .id
+                .strip_prefix("window-")
+                .ok_or_else(|| anyhow!("Invalid window id"))?;
             let handle = usize::from_str_radix(raw, 16).map_err(|_| anyhow!("Invalid window id"))?;
             let window = Window::from_raw_hwnd(handle as *mut c_void);
             if !window.is_valid() {
