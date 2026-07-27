@@ -1,9 +1,9 @@
 //! Webcam enumeration and recording helpers.
 //!
-//! On Windows we prefer the exact DirectShow device names reported by FFmpeg,
-//! because those are the names the recording process can actually open. The
-//! setup-screen preview is intentionally handled by one persistent WebView2
-//! media stream so it does not spawn FFmpeg processes while the UI is idle.
+//! Windows camera discovery uses the Windows MediaDevice API so cameras still
+//! appear in the UI even when FFmpeg's DirectShow diagnostic output differs by
+//! build or locale. When recording, we map the Windows friendly name to the
+//! DirectShow device list exposed by the installed FFmpeg build.
 
 use crate::recording::types::CameraInfo;
 use std::process::Command;
@@ -32,7 +32,6 @@ fn parse_dshow_device_names(section_name: &str) -> Vec<String> {
         if !in_section || line.contains("Alternative name") {
             continue;
         }
-
         if let Some(start) = line.find('"') {
             if let Some(end_rel) = line[start + 1..].find('"') {
                 let name = line[start + 1..start + 1 + end_rel].trim();
@@ -42,11 +41,41 @@ fn parse_dshow_device_names(section_name: &str) -> Vec<String> {
             }
         }
     }
-
     names
 }
 
+#[cfg(windows)]
+fn windows_cameras() -> Vec<CameraInfo> {
+    use windows::Devices::Enumeration::DeviceInformation;
+    use windows::Media::Devices::MediaDevice;
+
+    let Ok(selector) = MediaDevice::GetVideoCaptureSelector() else { return Vec::new(); };
+    let Ok(operation) = DeviceInformation::FindAllAsyncAqsFilter(&selector) else { return Vec::new(); };
+    let Ok(devices) = operation.get() else { return Vec::new(); };
+    let size = devices.Size().unwrap_or(0);
+    let mut cameras = Vec::with_capacity(size as usize);
+    for index in 0..size {
+        let Ok(device) = devices.GetAt(index) else { continue; };
+        let Ok(id) = device.Id() else { continue; };
+        let Ok(name) = device.Name() else { continue; };
+        cameras.push(CameraInfo {
+            id: format!("windows-camera:{}", id),
+            name: name.to_string(),
+            is_default: index == 0,
+        });
+    }
+    cameras
+}
+
 pub fn enumerate_cameras() -> Vec<CameraInfo> {
+    #[cfg(windows)]
+    {
+        let native = windows_cameras();
+        if !native.is_empty() {
+            return native;
+        }
+    }
+
     parse_dshow_device_names("video")
         .into_iter()
         .enumerate()
@@ -58,12 +87,21 @@ pub fn enumerate_cameras() -> Vec<CameraInfo> {
         .collect()
 }
 
+fn normalize(value: &str) -> String {
+    value.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' }).collect::<String>()
+        .split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 pub fn resolve_camera_name(id: &str) -> Option<String> {
     if let Some(name) = id.strip_prefix("dshow-camera:") {
         return Some(name.to_string());
     }
-    enumerate_cameras()
-        .into_iter()
-        .find(|device| device.id == id)
-        .map(|device| device.name)
+
+    let selected = enumerate_cameras().into_iter().find(|device| device.id == id)?;
+    let wanted = normalize(&selected.name);
+    let dshow = parse_dshow_device_names("video");
+    dshow.into_iter().find(|name| {
+        let candidate = normalize(name);
+        candidate == wanted || candidate.contains(&wanted) || wanted.contains(&candidate)
+    }).or(Some(selected.name))
 }
