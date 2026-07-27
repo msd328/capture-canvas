@@ -8,8 +8,11 @@ use std::ffi::c_void;
 use std::io::Write;
 use std::path::Path;
 use std::process::{Child, ChildStdin, Stdio};
-use std::sync::Arc;
-use std::thread;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use windows_capture::capture::{CaptureControl, Context as CaptureContext, GraphicsCaptureApiHandler};
 use windows_capture::frame::Frame;
@@ -21,56 +24,31 @@ use windows_capture::settings::{
 };
 use windows_capture::window::Window;
 
+/// Latest-frame exchange between the WGC callback and the FFmpeg writer.
+///
+/// The callback publishes frames as fast as Windows produces them. The writer
+/// consumes only the newest frame at the requested recording FPS. Swapping the
+/// Vecs keeps the hot path allocation-free after the first few frames and,
+/// importantly, prevents a slow FFmpeg pipe from blocking Windows capture.
+#[derive(Default)]
+struct FrameSlot {
+    frame: Vec<u8>,
+    generation: u64,
+}
+
 #[derive(Clone)]
 struct PipeFlags {
-    writer: Arc<Mutex<Option<ChildStdin>>>,
+    slot: Arc<Mutex<FrameSlot>>,
     width: u32,
     height: u32,
-    fps: u32,
 }
 
 struct FramePipe {
-    writer: Arc<Mutex<Option<ChildStdin>>>,
+    slot: Arc<Mutex<FrameSlot>>,
     width: u32,
     height: u32,
-    fps: u32,
-    started_at: Instant,
-    frames_written: u64,
-    last_frame: Vec<u8>,
     scratch: Vec<u8>,
-}
-
-impl FramePipe {
-    fn write_frame_copies(&mut self, frame: &[u8], target_count: u64) -> Result<(), String> {
-        if target_count <= self.frames_written {
-            return Ok(());
-        }
-        let mut guard = self.writer.lock();
-        let Some(stdin) = guard.as_mut() else {
-            return Ok(());
-        };
-        while self.frames_written < target_count {
-            stdin
-                .write_all(frame)
-                .map_err(|e| format!("Unable to pipe WGC frame to FFmpeg: {e}"))?;
-            self.frames_written += 1;
-        }
-        Ok(())
-    }
-
-    fn target_frame_count(&self) -> u64 {
-        let elapsed = self.started_at.elapsed().as_secs_f64();
-        ((elapsed * self.fps as f64).floor() as u64).saturating_add(1)
-    }
-
-    fn pad_to_now(&mut self) -> Result<(), String> {
-        if self.last_frame.is_empty() {
-            return Ok(());
-        }
-        let target = self.target_frame_count();
-        let frame = self.last_frame.clone();
-        self.write_frame_copies(&frame, target)
-    }
+    next_frame: Vec<u8>,
 }
 
 impl GraphicsCaptureApiHandler for FramePipe {
@@ -79,21 +57,18 @@ impl GraphicsCaptureApiHandler for FramePipe {
 
     fn new(ctx: CaptureContext<Self::Flags>) -> Result<Self, Self::Error> {
         Ok(Self {
-            writer: ctx.flags.writer,
+            slot: ctx.flags.slot,
             width: ctx.flags.width,
             height: ctx.flags.height,
-            fps: ctx.flags.fps,
-            started_at: Instant::now(),
-            frames_written: 0,
-            last_frame: Vec::new(),
             scratch: Vec::new(),
+            next_frame: Vec::new(),
         })
     }
 
     fn on_frame_arrived(
         &mut self,
         frame: &mut Frame,
-        capture_control: InternalCaptureControl,
+        _capture_control: InternalCaptureControl,
     ) -> Result<(), Self::Error> {
         let frame_width = frame.width();
         let frame_height = frame.height();
@@ -111,17 +86,16 @@ impl GraphicsCaptureApiHandler for FramePipe {
             ));
         }
 
-        self.last_frame.clear();
+        self.next_frame.clear();
         if frame_width == self.width && frame_height == self.height {
-            self.last_frame.extend_from_slice(bytes);
+            self.next_frame.extend_from_slice(bytes);
         } else {
-            // FFmpeg's rawvideo dimensions are fixed for the lifetime of a
-            // segment. Windows can change a WGC window's content size while the
-            // session is active, so normalize every changed frame into that fixed
-            // canvas instead of aborting the recording. Larger frames are center-
-            // cropped and smaller frames are center-letterboxed with black.
+            // FFmpeg rawvideo dimensions are fixed for a segment. WGC can resize
+            // a window while recording, so normalize changed frames into the
+            // fixed encoder canvas. Larger frames are centre-cropped and smaller
+            // frames are centre-letterboxed with black.
             let output_len = self.width as usize * self.height as usize * 4;
-            self.last_frame.resize(output_len, 0);
+            self.next_frame.resize(output_len, 0);
 
             let copy_width = frame_width.min(self.width) as usize;
             let copy_height = frame_height.min(self.height) as usize;
@@ -134,53 +108,114 @@ impl GraphicsCaptureApiHandler for FramePipe {
             for row in 0..copy_height {
                 let src_start = ((src_y + row) * frame_width as usize + src_x) * 4;
                 let dst_start = ((dst_y + row) * self.width as usize + dst_x) * 4;
-                self.last_frame[dst_start..dst_start + row_bytes]
+                self.next_frame[dst_start..dst_start + row_bytes]
                     .copy_from_slice(&bytes[src_start..src_start + row_bytes]);
             }
         }
 
-        let target = self.target_frame_count();
-        let current = self.last_frame.clone();
-        if let Err(error) = self.write_frame_copies(&current, target) {
-            capture_control.stop();
-            return Err(error);
-        }
+        // Publish the newest complete frame with a cheap Vec swap. Do not write
+        // to FFmpeg here: a blocking pipe write would stall WGC and cause motion
+        // capture to degrade into large bursts of repeated frames.
+        let mut slot = self.slot.lock();
+        std::mem::swap(&mut slot.frame, &mut self.next_frame);
+        slot.generation = slot.generation.wrapping_add(1);
         Ok(())
     }
 
     fn on_closed(&mut self) -> Result<(), Self::Error> {
-        self.pad_to_now()
+        Ok(())
     }
+}
+
+fn spawn_frame_writer(
+    mut stdin: ChildStdin,
+    slot: Arc<Mutex<FrameSlot>>,
+    stop: Arc<AtomicBool>,
+    fps: u32,
+) -> JoinHandle<Result<(), String>> {
+    thread::spawn(move || {
+        let fps = fps.clamp(1, 60);
+        let frame_interval = Duration::from_secs_f64(1.0 / fps as f64);
+        let mut next_tick = Instant::now();
+        let mut current_frame = Vec::<u8>::new();
+        let mut seen_generation = 0u64;
+
+        loop {
+            let now = Instant::now();
+            if now < next_tick {
+                thread::sleep(next_tick - now);
+            }
+            if stop.load(Ordering::Acquire) {
+                break;
+            }
+
+            // Swap in the latest WGC frame only when a newer one exists. If the
+            // captured content is static, keep writing the last frame at a steady
+            // CFR cadence so real elapsed duration is preserved.
+            {
+                let mut latest = slot.lock();
+                if latest.generation != seen_generation {
+                    std::mem::swap(&mut current_frame, &mut latest.frame);
+                    seen_generation = latest.generation;
+                }
+            }
+
+            if !current_frame.is_empty() {
+                stdin
+                    .write_all(&current_frame)
+                    .map_err(|e| format!("Unable to pipe paced WGC frame to FFmpeg: {e}"))?;
+            }
+
+            next_tick += frame_interval;
+            let after_write = Instant::now();
+            if next_tick <= after_write {
+                // Never try to catch up by dumping a burst of old frames. A late
+                // encoder tick should simply restart cadence from the current
+                // time; the next tick will use the freshest WGC frame available.
+                next_tick = after_write + frame_interval;
+            }
+        }
+
+        // Dropping stdin sends EOF to FFmpeg so it can flush the encoder and MP4
+        // trailer normally.
+        drop(stdin);
+        Ok(())
+    })
 }
 
 pub struct NativeVideoCapture {
     control: Option<CaptureControl<FramePipe, String>>,
-    writer: Arc<Mutex<Option<ChildStdin>>>,
+    writer_stop: Arc<AtomicBool>,
+    writer_thread: Option<JoinHandle<Result<(), String>>>,
     child: Child,
 }
 
 impl NativeVideoCapture {
     pub fn stop(mut self) -> Result<()> {
-        if let Some(control) = self.control.take() {
-            // Preserve real elapsed duration even when WGC emitted no new frame
-            // while the captured content was static.
-            let callback = control.callback();
-            callback
-                .lock()
-                .pad_to_now()
-                .map_err(|e| anyhow!(e))?;
+        let capture_result = if let Some(control) = self.control.take() {
             control
                 .stop()
-                .map_err(|e| anyhow!("Unable to stop Windows Graphics Capture: {e}"))?;
-        }
+                .map_err(|e| anyhow!("Unable to stop Windows Graphics Capture: {e}"))
+        } else {
+            Ok(())
+        };
 
-        // Closing stdin signals EOF to FFmpeg's rawvideo input so it can flush
-        // the H.264/AAC streams and write the MP4 trailer normally.
-        self.writer.lock().take();
+        self.writer_stop.store(true, Ordering::Release);
+        let writer_result = match self.writer_thread.take() {
+            Some(handle) => match handle.join() {
+                Ok(result) => result.map_err(|e| anyhow!(e)),
+                Err(_) => Err(anyhow!("WGC frame writer thread terminated unexpectedly")),
+            },
+            None => Ok(()),
+        };
+
         let status = self
             .child
             .wait()
             .context("Unable to finalize WGC recording segment")?;
+
+        capture_result?;
+        writer_result?;
         if !status.success() {
             return Err(anyhow!("FFmpeg could not finalize the WGC recording segment"));
         }
@@ -193,7 +228,7 @@ fn spawn_ffmpeg(
     width: u32,
     height: u32,
     output_path: &Path,
-) -> Result<(Child, Arc<Mutex<Option<ChildStdin>>>)> {
+) -> Result<(Child, ChildStdin)> {
     let fps = config.fps.clamp(1, 60).to_string();
     let size = format!("{width}x{height}");
     let mut cmd = encoding::ffmpeg_command();
@@ -290,7 +325,6 @@ fn spawn_ffmpeg(
         .stdin
         .take()
         .ok_or_else(|| anyhow!("FFmpeg rawvideo stdin was not available"))?;
-    let writer = Arc::new(Mutex::new(Some(stdin)));
 
     thread::sleep(Duration::from_millis(250));
     if let Some(status) = child.try_wait().context("Unable to inspect FFmpeg process")? {
@@ -302,7 +336,7 @@ fn spawn_ffmpeg(
                 .unwrap_or_else(|| "unknown".into())
         ));
     }
-    Ok((child, writer))
+    Ok((child, stdin))
 }
 
 fn start_item<T>(
@@ -315,13 +349,15 @@ fn start_item<T>(
 where
     T: TryInto<GraphicsCaptureItemType> + Send + 'static,
 {
-    let (child, writer) = spawn_ffmpeg(config, width, height, output_path)?;
+    let (child, stdin) = spawn_ffmpeg(config, width, height, output_path)?;
     let fps = config.fps.clamp(1, 60);
+    let slot = Arc::new(Mutex::new(FrameSlot::default()));
+    let writer_stop = Arc::new(AtomicBool::new(false));
+    let writer_thread = spawn_frame_writer(stdin, slot.clone(), writer_stop.clone(), fps);
 
-    // Use the platform defaults for optional WGC session properties. Border,
-    // cursor and minimum-update-interval toggles are version-gated Windows APIs;
-    // requesting them explicitly can make capture fail on otherwise-supported
-    // Windows builds. Frame pacing is already handled by FramePipe.
+    // Use platform defaults for optional WGC session properties. Border, cursor
+    // and minimum-update-interval toggles are version-gated Windows APIs. The
+    // dedicated writer thread above owns CFR pacing independently of WGC timing.
     let settings = Settings::new(
         item,
         CursorCaptureSettings::Default,
@@ -331,17 +367,17 @@ where
         DirtyRegionSettings::Default,
         ColorFormat::Bgra8,
         PipeFlags {
-            writer: writer.clone(),
+            slot,
             width,
             height,
-            fps,
         },
     );
 
     let control = match FramePipe::start_free_threaded(settings) {
         Ok(control) => control,
         Err(error) => {
-            writer.lock().take();
+            writer_stop.store(true, Ordering::Release);
+            let _ = writer_thread.join();
             let mut child = child;
             let _ = child.kill();
             let _ = child.wait();
@@ -351,7 +387,8 @@ where
 
     Ok(NativeVideoCapture {
         control: Some(control),
-        writer,
+        writer_stop,
+        writer_thread: Some(writer_thread),
         child,
     })
 }
