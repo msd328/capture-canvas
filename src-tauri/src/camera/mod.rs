@@ -5,11 +5,10 @@
 //! build or locale. When recording, we map the Windows friendly name to the
 //! DirectShow device list exposed by the installed FFmpeg build.
 
-use crate::recording::types::CameraInfo;
-use std::process::Command;
+use crate::{encoding, recording::types::CameraInfo};
 
 fn parse_dshow_device_names(section_name: &str) -> Vec<String> {
-    let Ok(output) = Command::new("ffmpeg")
+    let Ok(output) = encoding::ffmpeg_command()
         .args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"])
         .output()
     else {
@@ -88,8 +87,14 @@ pub fn enumerate_cameras() -> Vec<CameraInfo> {
 }
 
 fn normalize(value: &str) -> String {
-    value.to_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' }).collect::<String>()
-        .split_whitespace().collect::<Vec<_>>().join(" ")
+    value
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 pub fn resolve_camera_name(id: &str) -> Option<String> {
@@ -100,8 +105,11 @@ pub fn resolve_camera_name(id: &str) -> Option<String> {
     let selected = enumerate_cameras().into_iter().find(|device| device.id == id)?;
     let wanted = normalize(&selected.name);
     let dshow = parse_dshow_device_names("video");
-    dshow.into_iter().find(|name| {
-        let candidate = normalize(name);
-        candidate == wanted || candidate.contains(&wanted) || wanted.contains(&candidate)
-    }).or(Some(selected.name))
+    dshow
+        .into_iter()
+        .find(|name| {
+            let candidate = normalize(name);
+            candidate == wanted || candidate.contains(&wanted) || wanted.contains(&candidate)
+        })
+        .or(Some(selected.name))
 }
