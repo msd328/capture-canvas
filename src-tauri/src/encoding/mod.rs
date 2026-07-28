@@ -1,12 +1,10 @@
 //! Encoding + muxing helpers used by the Windows recorder.
 //!
-//! Video frames are captured natively through Windows Graphics Capture and are
-//! currently encoded/muxed by an FFmpeg process. Keep all FFmpeg discovery and
-//! encoder selection in this module so packaging can later swap PATH lookup for
-//! an approved bundled sidecar without touching capture/audio orchestration.
+//! Live screen capture normally uses the native Windows encoder. FFmpeg remains
+//! available for compatibility recording/finalization paths, but expensive media
+//! decoration work must not block the recorder controls.
 
 use anyhow::{anyhow, Context, Result};
-use base64::Engine;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -70,9 +68,6 @@ fn encoder_list() -> String {
 
 fn h264_pixel_format(encoder: &str) -> &'static str {
     match encoder {
-        // Intel Quick Sync's H.264 encoder uses NV12 surfaces. Explicitly
-        // request NV12 so FFmpeg does not have to auto-correct yuv420p and emit
-        // an "Incompatible pixel format" warning on every recording.
         "h264_qsv" => "nv12",
         _ => "yuv420p",
     }
@@ -112,8 +107,7 @@ fn probe_encoder(name: &str) -> bool {
 }
 
 /// Select a hardware encoder only when it can actually encode on this machine.
-/// FFmpeg can list NVENC/QSV/AMF even when the matching GPU/driver is absent, so
-/// a tiny one-frame probe is more reliable than merely parsing `-encoders`.
+/// The result is cached for the lifetime of the app.
 pub fn selected_h264_encoder() -> &'static str {
     H264_ENCODER
         .get_or_init(|| {
@@ -135,50 +129,33 @@ pub fn apply_h264_options(cmd: &mut Command, encoder: &str) {
             cmd.args(["-preset", "veryfast", "-crf", "23"]);
         }
         "h264_nvenc" => {
-            cmd.args(["-preset", "p4", "-b:v", "8M", "-maxrate", "12M", "-bufsize", "16M"]);
+            cmd.args([
+                "-preset",
+                "p4",
+                "-b:v",
+                "8M",
+                "-maxrate",
+                "12M",
+                "-bufsize",
+                "16M",
+            ]);
         }
         _ => {
-            // Generic bitrate options are accepted by Media Foundation, QSV and
-            // AMF and avoid depending on vendor-specific quality flags.
-            cmd.args(["-b:v", "8M", "-maxrate", "12M", "-bufsize", "16M"]);
+            cmd.args([
+                "-b:v",
+                "8M",
+                "-maxrate",
+                "12M",
+                "-bufsize",
+                "16M",
+            ]);
         }
     }
 }
 
-fn extract_thumbnail(video_path: &Path, seek: Option<&str>) -> Option<Vec<u8>> {
-    let mut cmd = ffmpeg_command();
-    cmd.args(["-hide_banner", "-loglevel", "error"]);
-    if let Some(seek) = seek {
-        cmd.args(["-ss", seek]);
-    }
-    let output = cmd
-        .arg("-i")
-        .arg(video_path)
-        .args([
-            "-frames:v",
-            "1",
-            "-vf",
-            "scale=480:-2",
-            "-q:v",
-            "6",
-            "-f",
-            "image2pipe",
-            "-vcodec",
-            "mjpeg",
-            "pipe:1",
-        ])
-        .output()
-        .ok()?;
-
-    (output.status.success() && !output.stdout.is_empty()).then_some(output.stdout)
-}
-
-/// Generate a compact JPEG data URL for the local Library card. A half-second
-/// seek normally avoids a black encoder-start frame; very short clips retry from
-/// the first frame.
-pub fn thumbnail_data_url(video_path: &Path) -> Option<String> {
-    let jpeg = extract_thumbnail(video_path, Some("0.5"))
-        .or_else(|| extract_thumbnail(video_path, None))?;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(jpeg);
-    Some(format!("data:image/jpeg;base64,{encoded}"))
+/// Thumbnail extraction is deliberately not part of the Stop transaction.
+/// Returning the completed MP4 to the UI takes priority; a later library worker
+/// can generate thumbnails without holding the recorder on `Saving…`.
+pub fn thumbnail_data_url(_video_path: &Path) -> Option<String> {
+    None
 }
