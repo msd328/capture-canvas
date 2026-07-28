@@ -19,11 +19,12 @@ must provide the validation evidence.
 
 ## Current focus
 
-1. Validate the instrumented `windows_capture` facade and timeline coverage diagnostics on Windows.
-2. Complete WGC frame-delivery/FPS-limiter, camera, and audio-mixer counters.
-3. Verify and fix static-screen duration continuity.
-4. Reduce warm Start, Pause, Resume, and Stop latency.
-5. Remove the remaining FFmpeg compatibility paths.
+1. Revalidate the instrumented `windows_capture` facade after the Rust 2021 namespace fix.
+2. Validate timeline coverage diagnostics on Windows.
+3. Complete WGC frame-delivery/FPS-limiter, camera, and audio-mixer counters.
+4. Verify and fix static-screen duration continuity.
+5. Reduce warm Start, Pause, Resume, and Stop latency.
+6. Remove the remaining FFmpeg compatibility paths.
 
 ---
 
@@ -55,9 +56,9 @@ must provide the validation evidence.
 | VID-05 | ✅ | Resolution-dependent bitrate selection | Health logs show expected output bitrate range |
 | VID-06 | ✅ | FPS limiting on high-refresh displays | Requested FPS is bounded |
 | VID-07 | 🟡 | Background H.264/AAC encoder warm-up | Compare first Start latency before/after warm-up |
-| VID-08 | 🟡 | Encoder submission counters | Instrumented facade compile/runtime pending |
+| VID-08 | 🟡 | Encoder submission counters | Initial Windows build failed with unresolved facade namespace; fix committed in `4c18cde`, rebuild pending |
 | VID-09 | 🔵 | WGC received/skipped/encoded counters | Log received, rate-limited, encoded, failed counts |
-| VID-10 | 🔵 | Static-screen duration continuity | 60 seconds static produces approximately 60 seconds output; timeline deficit diagnostics are now available |
+| VID-10 | 🔵 | Static-screen duration continuity | 60 seconds static produces approximately 60 seconds output; timeline deficit diagnostics are available |
 | VID-11 | 🔵 | Pure D3D11 selected-area crop | No CPU BGRA crop copy |
 | VID-12 | ⚪ | Hardware encoder capability reporting | Show selected hardware/software encoder path |
 | VID-13 | ⚪ | Smaller/balanced/high-quality presets | Quality and bitrate presets validated |
@@ -128,10 +129,10 @@ must provide the validation evidence.
 | HLT-02 | ✅ | Encoder startup duration | `start_ms` emitted |
 | HLT-03 | ✅ | Stop/finalisation duration | `stop_ms` emitted |
 | HLT-04 | ✅ | Output size and average bitrate | Bytes/Mbps emitted |
-| HLT-05 | 🟡 | Submitted frames and failures | Facade runtime pending |
-| HLT-06 | 🟡 | Effective encoded FPS | Facade runtime pending |
-| HLT-07 | 🟡 | Largest submitted-frame gap | Facade runtime pending |
-| HLT-08 | 🟡 | Audio buffers and bytes submitted | Facade runtime pending |
+| HLT-05 | 🟡 | Submitted frames and failures | Facade rebuild/runtime pending after namespace fix |
+| HLT-06 | 🟡 | Effective encoded FPS | Facade rebuild/runtime pending after namespace fix |
+| HLT-07 | 🟡 | Largest submitted-frame gap | Facade rebuild/runtime pending after namespace fix |
+| HLT-08 | 🟡 | Audio buffers and bytes submitted | Facade rebuild/runtime pending after namespace fix |
 | HLT-09 | 🔵 | WGC frames received | Capture-handler counter |
 | HLT-10 | 🔵 | FPS-limited frames skipped | Capture-handler counter |
 | HLT-11 | 🔵 | Camera frames received/applied | Camera/capture counters |
@@ -139,7 +140,7 @@ must provide the validation evidence.
 | HLT-13 | 🔵 | Audio/video drift | Millisecond drift report |
 | HLT-14 | ⚪ | Exportable diagnostic report | Copy/save support bundle |
 | HLT-15 | ⚪ | User-friendly health summary | Non-technical UI status |
-| HLT-16 | 🟡 | Expected-frame timeline coverage and deficit | Windows compile/runtime pending; log `expected_frames`, `frame_deficit`, and `timeline_coverage_pct` |
+| HLT-16 | 🟡 | Expected-frame timeline coverage and deficit | Initial Windows build blocked by facade namespace; rebuild pending after `4c18cde` |
 
 ## Recording library
 
@@ -281,3 +282,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-28 | `c688bc7` baseline | Added formal tracking after encoder submission instrumentation |
 | 2026-07-28 | `02f950e` | Added repository roadmap and validation policy |
 | 2026-07-28 | `d0b4708` | Added expected-frame timeline coverage and deficit diagnostics; HLT-16 → 🟡 |
+| 2026-07-28 | `4c18cde` | Fixed Rust 2021 crate-local `windows_capture` facade resolution after E0433 build failure; validation remains pending |
