@@ -10,7 +10,7 @@ import { FloatingControls } from "@/components/recorder/FloatingControls";
 import { Button } from "@/components/ui/button";
 import { useRecorder } from "@/hooks/useRecorder";
 import { getSettings, getSystemAudioSupported } from "@/services/desktop";
-import type { CaptureTarget } from "@/types/recorder";
+import type { CaptureTarget, CropRegion } from "@/types/recorder";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -30,6 +30,7 @@ function RecorderPage() {
   const navigate = useNavigate();
   const recorder = useRecorder();
   const [target, setTarget] = useState<CaptureTarget | null>(null);
+  const [cropRegion, setCropRegion] = useState<CropRegion | null>(null);
   const [micOn, setMicOn] = useState(true);
   const [micId, setMicId] = useState<string | null>(null);
   const [cameraOn, setCameraOn] = useState(false);
@@ -59,6 +60,7 @@ function RecorderPage() {
       cameraId: cameraOn ? cameraId : null,
       systemAudio: systemAudioOn && systemAudioSupported,
       fps,
+      cropRegion,
     });
   };
 
@@ -90,11 +92,16 @@ function RecorderPage() {
           <h2 className="text-sm font-semibold text-foreground">Screen</h2>
           {target && (
             <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">
-              {target.kind === "display" ? "Display" : "Window"} selected
+              {cropRegion ? "Selected area" : target.kind === "display" ? "Display" : "Window"} selected
             </span>
           )}
         </div>
-        <SourceSelector value={target} onChange={setTarget} />
+        <SourceSelector
+          value={target}
+          onChange={setTarget}
+          cropRegion={cropRegion}
+          onCropChange={setCropRegion}
+        />
       </section>
 
       <div className="grid gap-4 md:grid-cols-2">
