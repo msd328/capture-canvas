@@ -54,6 +54,7 @@ windows_capture_windows = { package = "windows", version = "0.62.2", features = 
 # feed PCM into the Windows encoder/mixer.
 cpal = "0.15"
 hound = "3.5"
-# MIT-licensed wrapper over Windows.Graphics.Capture + D3D11. It gives us real
-# HWND/HMONITOR capture while our recorder orchestration stays independent.
-windows-capture = "2.0"
+# MIT-licensed wrapper over Windows.Graphics.Capture + D3D11. The dependency is
+# aliased so our crate-local `windows_capture` facade can add encoder diagnostics
+# while preserving the existing capture API paths.
+windows_capture_core = { package = "windows-capture", version = "2.0" }
