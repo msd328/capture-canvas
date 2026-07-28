@@ -51,9 +51,10 @@ export interface RecordingConfig {
 export type RecordingStatus =
   | "idle"
   | "preparing"
-  | "countdown"
   | "recording"
+  | "pausing"
   | "paused"
+  | "resuming"
   | "stopping"
   | "error";
 
