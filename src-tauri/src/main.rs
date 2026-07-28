@@ -12,8 +12,22 @@ mod commands;
 mod encoding;
 mod recording;
 mod state;
+
+// Rust 2021 resolves `windows_capture::...` as an external-crate path from
+// nested modules. Keep the instrumentation facade in its own internal module,
+// re-export its public API at the crate root, and alias this crate as
+// `windows_capture`. Existing capture imports then continue to use the same
+// paths while the actual dependency remains explicitly named
+// `windows_capture_core` in Cargo.toml.
 #[cfg(windows)]
-mod windows_capture;
+#[path = "windows_capture.rs"]
+mod windows_capture_facade;
+#[cfg(windows)]
+pub use windows_capture_facade::{
+    capture, d3d11, encoder, frame, graphics_capture_api, monitor, settings, window,
+};
+#[cfg(windows)]
+extern crate self as windows_capture;
 
 use state::AppState;
 
