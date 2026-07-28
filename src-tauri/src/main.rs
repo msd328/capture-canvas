@@ -12,6 +12,8 @@ mod commands;
 mod encoding;
 mod recording;
 mod state;
+#[cfg(windows)]
+mod windows_capture;
 
 use state::AppState;
 
