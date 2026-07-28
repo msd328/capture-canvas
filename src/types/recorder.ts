@@ -38,12 +38,26 @@ export interface CaptureTarget {
   id: string;
 }
 
+export interface CropRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface CapturePreview {
+  dataUrl: string;
+  width: number;
+  height: number;
+}
+
 export interface RecordingConfig {
   target: CaptureTarget;
   microphoneId: string | null;
   cameraId: string | null;
   systemAudio: boolean;
   fps: number;
+  cropRegion?: CropRegion | null;
   outputPath?: string;
   title?: string;
 }
