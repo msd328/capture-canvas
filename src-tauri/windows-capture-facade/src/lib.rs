@@ -1,11 +1,282 @@
 //! Instrumented facade over the MIT-licensed `windows-capture` crate.
 //!
 //! Capture code continues using the familiar `windows_capture::...` paths. The
-//! facade delegates every operation to the upstream crate while wrapping
-//! `VideoEncoder` with lightweight per-segment submission counters.
+//! facade delegates capture and encoding to the upstream crate while adding
+//! per-segment delivery, limiter, video, and audio diagnostics.
+
+use parking_lot::Mutex;
+use std::cell::RefCell;
+use std::sync::Arc;
+use std::time::Instant;
+
+#[derive(Default)]
+struct CaptureDeliveryTiming {
+    target_fps: u32,
+    frame_interval_hns: i64,
+    next_frame_hns: Option<i64>,
+    frames_received: u64,
+    frames_rate_limited: u64,
+    first_timestamp_hns: Option<i64>,
+    last_timestamp_hns: Option<i64>,
+    largest_frame_gap_hns: i64,
+}
+
+#[derive(Clone, Copy, Default)]
+struct CaptureDeliverySnapshot {
+    frames_received: u64,
+    frames_rate_limited: u64,
+    capture_fps: f64,
+    largest_frame_gap_ms: f64,
+}
+
+#[derive(Default)]
+struct CaptureDeliveryHealth {
+    timing: Mutex<CaptureDeliveryTiming>,
+}
+
+impl CaptureDeliveryHealth {
+    fn configure_target_fps(&self, target_fps: u32) {
+        let target_fps = target_fps.max(1);
+        let mut timing = self.timing.lock();
+        timing.target_fps = target_fps;
+        timing.frame_interval_hns = (10_000_000i64 / i64::from(target_fps)).max(1);
+        timing.next_frame_hns = None;
+    }
+
+    fn record_received(&self, timestamp_hns: Option<i64>) {
+        let mut timing = self.timing.lock();
+        timing.frames_received = timing.frames_received.saturating_add(1);
+
+        let Some(timestamp_hns) = timestamp_hns else {
+            return;
+        };
+
+        if timing.first_timestamp_hns.is_none() {
+            timing.first_timestamp_hns = Some(timestamp_hns);
+        }
+        if let Some(previous) = timing.last_timestamp_hns {
+            let gap = timestamp_hns.saturating_sub(previous).max(0);
+            timing.largest_frame_gap_hns = timing.largest_frame_gap_hns.max(gap);
+        }
+        timing.last_timestamp_hns = Some(timestamp_hns);
+
+        if timing.frame_interval_hns <= 0 {
+            return;
+        }
+
+        if let Some(next) = timing.next_frame_hns {
+            if timestamp_hns < next {
+                timing.frames_rate_limited = timing.frames_rate_limited.saturating_add(1);
+                return;
+            }
+
+            let mut following = next;
+            while following <= timestamp_hns {
+                following = following.saturating_add(timing.frame_interval_hns);
+            }
+            timing.next_frame_hns = Some(following);
+        } else {
+            timing.next_frame_hns = Some(timestamp_hns.saturating_add(timing.frame_interval_hns));
+        }
+    }
+
+    fn snapshot(&self) -> CaptureDeliverySnapshot {
+        let timing = self.timing.lock();
+        let timestamp_span_hns = match (timing.first_timestamp_hns, timing.last_timestamp_hns) {
+            (Some(first), Some(last)) => last.saturating_sub(first).max(0),
+            _ => 0,
+        };
+        let timestamp_span_seconds = timestamp_span_hns as f64 / 10_000_000.0;
+        let capture_fps = if timing.frames_received > 1 && timestamp_span_seconds > 0.0 {
+            (timing.frames_received - 1) as f64 / timestamp_span_seconds
+        } else {
+            0.0
+        };
+
+        CaptureDeliverySnapshot {
+            frames_received: timing.frames_received,
+            frames_rate_limited: timing.frames_rate_limited,
+            capture_fps,
+            largest_frame_gap_ms: timing.largest_frame_gap_hns as f64 / 10_000.0,
+        }
+    }
+}
+
+thread_local! {
+    static ACTIVE_CAPTURE_DELIVERY: RefCell<Option<Arc<CaptureDeliveryHealth>>> = RefCell::new(None);
+}
+
+fn active_capture_delivery() -> Option<Arc<CaptureDeliveryHealth>> {
+    ACTIVE_CAPTURE_DELIVERY.with(|slot| slot.borrow().clone())
+}
 
 pub mod capture {
-    pub use windows_capture_core::capture::*;
+    use super::{CaptureDeliveryHealth, ACTIVE_CAPTURE_DELIVERY};
+    use parking_lot::Mutex;
+    use std::sync::{atomic::AtomicBool, Arc};
+    use std::thread::JoinHandle;
+
+    use windows_capture_core::capture::GraphicsCaptureApiHandler as CoreGraphicsCaptureApiHandler;
+    use windows_capture_core::frame::Frame;
+    use windows_capture_core::graphics_capture_api::InternalCaptureControl;
+    use windows_capture_core::settings::{GraphicsCaptureItemType, Settings};
+
+    pub use windows_capture_core::capture::{CaptureControlError, GraphicsCaptureApiError};
+    pub type Context<Flags> = windows_capture_core::capture::Context<Flags>;
+
+    struct InstrumentedHandler<T: GraphicsCaptureApiHandler> {
+        inner: Arc<Mutex<T>>,
+        delivery: Arc<CaptureDeliveryHealth>,
+    }
+
+    impl<T> CoreGraphicsCaptureApiHandler for InstrumentedHandler<T>
+    where
+        T: GraphicsCaptureApiHandler + Send + 'static,
+        T::Flags: Send,
+    {
+        type Flags = T::Flags;
+        type Error = T::Error;
+
+        fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error> {
+            let delivery = Arc::new(CaptureDeliveryHealth::default());
+            ACTIVE_CAPTURE_DELIVERY.with(|slot| {
+                *slot.borrow_mut() = Some(delivery.clone());
+            });
+
+            match T::new(ctx) {
+                Ok(inner) => Ok(Self {
+                    inner: Arc::new(Mutex::new(inner)),
+                    delivery,
+                }),
+                Err(error) => {
+                    ACTIVE_CAPTURE_DELIVERY.with(|slot| {
+                        slot.borrow_mut().take();
+                    });
+                    Err(error)
+                }
+            }
+        }
+
+        fn on_frame_arrived(
+            &mut self,
+            frame: &mut Frame,
+            capture_control: InternalCaptureControl,
+        ) -> Result<(), Self::Error> {
+            let timestamp = frame.timestamp().ok().map(|value| value.Duration);
+            self.delivery.record_received(timestamp);
+            self.inner
+                .lock()
+                .on_frame_arrived(frame, capture_control)
+        }
+
+        fn on_closed(&mut self) -> Result<(), Self::Error> {
+            self.inner.lock().on_closed()
+        }
+    }
+
+    impl<T: GraphicsCaptureApiHandler> Drop for InstrumentedHandler<T> {
+        fn drop(&mut self) {
+            ACTIVE_CAPTURE_DELIVERY.with(|slot| {
+                let should_clear = slot
+                    .borrow()
+                    .as_ref()
+                    .map(|active| Arc::ptr_eq(active, &self.delivery))
+                    .unwrap_or(false);
+                if should_clear {
+                    slot.borrow_mut().take();
+                }
+            });
+        }
+    }
+
+    pub struct CaptureControl<T, E>
+    where
+        T: GraphicsCaptureApiHandler<Error = E> + Send + 'static,
+        T::Flags: Send,
+        E: Send + Sync,
+    {
+        inner: windows_capture_core::capture::CaptureControl<InstrumentedHandler<T>, E>,
+        callback: Arc<Mutex<T>>,
+    }
+
+    impl<T, E> CaptureControl<T, E>
+    where
+        T: GraphicsCaptureApiHandler<Error = E> + Send + 'static,
+        T::Flags: Send,
+        E: Send + Sync,
+    {
+        #[must_use]
+        pub fn is_finished(&self) -> bool {
+            self.inner.is_finished()
+        }
+
+        #[must_use]
+        pub fn into_thread_handle(
+            self,
+        ) -> JoinHandle<Result<(), GraphicsCaptureApiError<E>>> {
+            self.inner.into_thread_handle()
+        }
+
+        #[must_use]
+        pub fn halt_handle(&self) -> Arc<AtomicBool> {
+            self.inner.halt_handle()
+        }
+
+        #[must_use]
+        pub fn callback(&self) -> Arc<Mutex<T>> {
+            self.callback.clone()
+        }
+
+        pub fn wait(self) -> Result<(), CaptureControlError<E>> {
+            self.inner.wait()
+        }
+
+        pub fn stop(self) -> Result<(), CaptureControlError<E>> {
+            self.inner.stop()
+        }
+    }
+
+    pub trait GraphicsCaptureApiHandler: Sized {
+        type Flags;
+        type Error: Send + Sync;
+
+        fn start<I: TryInto<GraphicsCaptureItemType>>(
+            settings: Settings<Self::Flags, I>,
+        ) -> Result<(), GraphicsCaptureApiError<Self::Error>>
+        where
+            Self: Send + 'static,
+            Self::Flags: Send,
+        {
+            <InstrumentedHandler<Self> as CoreGraphicsCaptureApiHandler>::start(settings)
+        }
+
+        fn start_free_threaded<I: TryInto<GraphicsCaptureItemType> + Send + 'static>(
+            settings: Settings<Self::Flags, I>,
+        ) -> Result<CaptureControl<Self, Self::Error>, GraphicsCaptureApiError<Self::Error>>
+        where
+            Self: Send + 'static,
+            Self::Flags: Send,
+        {
+            let inner = <InstrumentedHandler<Self> as CoreGraphicsCaptureApiHandler>::start_free_threaded(settings)?;
+            let callback = {
+                let adapter = inner.callback();
+                adapter.lock().inner.clone()
+            };
+            Ok(CaptureControl { inner, callback })
+        }
+
+        fn new(ctx: Context<Self::Flags>) -> Result<Self, Self::Error>;
+
+        fn on_frame_arrived(
+            &mut self,
+            frame: &mut Frame,
+            capture_control: InternalCaptureControl,
+        ) -> Result<(), Self::Error>;
+
+        fn on_closed(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
 }
 
 pub mod d3d11 {
@@ -34,9 +305,11 @@ pub mod window {
 
 pub mod encoder {
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
     use std::time::Instant;
 
     use super::frame::Frame;
+    use super::{active_capture_delivery, CaptureDeliveryHealth, CaptureDeliverySnapshot};
 
     pub use windows_capture_core::encoder::{
         AudioSettingsBuilder, ContainerSettingsBuilder, ImageEncoder,
@@ -104,6 +377,7 @@ pub mod encoder {
         output_path: PathBuf,
         started_at: Instant,
         target_fps: u32,
+        delivery: Option<Arc<CaptureDeliveryHealth>>,
         video_submitted: u64,
         video_failed: u64,
         audio_buffers_submitted: u64,
@@ -117,7 +391,11 @@ pub mod encoder {
     }
 
     impl EncoderSubmissionHealth {
-        fn new(output_path: PathBuf, target_fps: u32) -> Self {
+        fn new(
+            output_path: PathBuf,
+            target_fps: u32,
+            delivery: Option<Arc<CaptureDeliveryHealth>>,
+        ) -> Self {
             let suppress_log = output_path
                 .file_name()
                 .and_then(|value| value.to_str())
@@ -128,6 +406,7 @@ pub mod encoder {
                 output_path,
                 started_at: Instant::now(),
                 target_fps: target_fps.max(1),
+                delivery,
                 video_submitted: 0,
                 video_failed: 0,
                 audio_buffers_submitted: 0,
@@ -196,10 +475,6 @@ pub mod encoder {
             };
             let largest_frame_gap_ms = self.largest_frame_gap_hns as f64 / 10_000.0;
 
-            // Timestamp-based FPS cannot see a missing tail after the final WGC frame.
-            // Compare submissions with wall time measured from the first accepted frame
-            // to the instant capture shutdown began. A low coverage value exposes static
-            // screen delivery stalls and other missing-frame periods.
             let active_wall_ms = self
                 .first_video_wall
                 .map(|first| capture_ended_at.duration_since(first).as_millis())
@@ -220,18 +495,34 @@ pub mod encoder {
                 100.0
             };
 
+            let delivery = self
+                .delivery
+                .as_ref()
+                .map(|health| health.snapshot())
+                .unwrap_or_else(CaptureDeliverySnapshot::default);
+            let expected_encoder_attempts = delivery
+                .frames_received
+                .saturating_sub(delivery.frames_rate_limited);
+            let actual_encoder_attempts = self.video_submitted.saturating_add(self.video_failed);
+            let processing_deficit = expected_encoder_attempts.saturating_sub(actual_encoder_attempts);
+
             eprintln!(
-                "[Recorder][StreamHealth] finalize_ok={} wall_ms={} active_wall_ms={} target_fps={} frames_submitted={} expected_frames={} frame_deficit={} timeline_coverage_pct={:.1} frame_failures={} effective_fps={:.2} max_frame_gap_ms={:.1} audio_buffers={} audio_failures={} audio_bytes={} path={}",
+                "[Recorder][StreamHealth] finalize_ok={} wall_ms={} active_wall_ms={} target_fps={} frames_received={} frames_rate_limited={} frames_submitted={} expected_frames={} frame_deficit={} timeline_coverage_pct={:.1} processing_deficit={} frame_failures={} capture_fps={:.2} effective_fps={:.2} max_capture_gap_ms={:.1} max_frame_gap_ms={:.1} audio_buffers={} audio_failures={} audio_bytes={} path={}",
                 finalize_ok,
                 self.started_at.elapsed().as_millis(),
                 active_wall_ms,
                 self.target_fps,
+                delivery.frames_received,
+                delivery.frames_rate_limited,
                 self.video_submitted,
                 expected_frames,
                 frame_deficit,
                 coverage_percent,
+                processing_deficit,
                 self.video_failed,
+                delivery.capture_fps,
                 effective_fps,
+                delivery.largest_frame_gap_ms,
                 largest_frame_gap_ms,
                 self.audio_buffers_submitted,
                 self.audio_failed,
@@ -239,9 +530,22 @@ pub mod encoder {
                 self.output_path.display(),
             );
 
+            if delivery.frames_received == 0 {
+                eprintln!(
+                    "[Recorder][StreamHealth] warning=no_wgc_frames_received path={}",
+                    self.output_path.display()
+                );
+            }
             if self.video_submitted == 0 {
                 eprintln!(
                     "[Recorder][StreamHealth] warning=no_video_frames_submitted path={}",
+                    self.output_path.display()
+                );
+            }
+            if delivery.largest_frame_gap_ms > 1_000.0 {
+                eprintln!(
+                    "[Recorder][StreamHealth] warning=large_capture_gap gap_ms={:.1} path={}",
+                    delivery.largest_frame_gap_ms,
                     self.output_path.display()
                 );
             }
@@ -249,6 +553,15 @@ pub mod encoder {
                 eprintln!(
                     "[Recorder][StreamHealth] warning=large_video_gap gap_ms={:.1} path={}",
                     largest_frame_gap_ms,
+                    self.output_path.display()
+                );
+            }
+            if processing_deficit > 0 {
+                eprintln!(
+                    "[Recorder][StreamHealth] warning=capture_processing_deficit expected_attempts={} actual_attempts={} deficit={} path={}",
+                    expected_encoder_attempts,
+                    actual_encoder_attempts,
+                    processing_deficit,
                     self.output_path.display()
                 );
             }
@@ -289,6 +602,10 @@ pub mod encoder {
         ) -> Result<Self, VideoEncoderError> {
             let output_path = path.as_ref().to_path_buf();
             let (video_settings, target_fps) = video_settings.into_inner();
+            let delivery = active_capture_delivery();
+            if let Some(health) = delivery.as_ref() {
+                health.configure_target_fps(target_fps);
+            }
             let inner = windows_capture_core::encoder::VideoEncoder::new(
                 video_settings,
                 audio_settings,
@@ -297,7 +614,7 @@ pub mod encoder {
             )?;
             Ok(Self {
                 inner,
-                health: EncoderSubmissionHealth::new(output_path, target_fps),
+                health: EncoderSubmissionHealth::new(output_path, target_fps, delivery),
             })
         }
 
