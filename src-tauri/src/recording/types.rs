@@ -11,7 +11,7 @@ pub struct DisplayInfo {
     pub width: u32,
     pub height: u32,
     pub is_primary: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thumbnail_data_url: Option<String>,
 }
 
@@ -23,7 +23,7 @@ pub struct WindowInfo {
     pub app_name: String,
     pub width: u32,
     pub height: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thumbnail_data_url: Option<String>,
 }
 
@@ -103,7 +103,7 @@ pub struct RecordingOutput {
     pub width: u32,
     pub height: u32,
     pub file_size_bytes: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thumbnail_data_url: Option<String>,
 }
 
