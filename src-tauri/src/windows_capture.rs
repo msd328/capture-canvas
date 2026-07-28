@@ -39,10 +39,9 @@ pub mod encoder {
     use super::frame::Frame;
 
     pub use windows_capture_core::encoder::{
-        AudioEncoderSource, AudioSettingsBuilder, AudioSettingsSubType,
-        ContainerSettingsBuilder, ContainerSettingsSubType, ImageEncoder,
-        ImageEncoderError, ImageEncoderPixelFormat, ImageFormat, VideoEncoderError,
-        VideoEncoderSource, VideoSettingsBuilder, VideoSettingsSubType,
+        AudioSettingsBuilder, ContainerSettingsBuilder, ImageEncoder,
+        ImageEncoderPixelFormat, ImageFormat, VideoEncoderError, VideoSettingsBuilder,
+        VideoSettingsSubType,
     };
 
     struct EncoderSubmissionHealth {
@@ -205,23 +204,6 @@ pub mod encoder {
                 self.health.record_video_success(timestamp);
             } else {
                 self.health.record_video_failure();
-            }
-            result
-        }
-
-        pub fn send_frame_with_audio(
-            &mut self,
-            frame: &mut Frame,
-            audio_buffer: &[u8],
-        ) -> Result<(), VideoEncoderError> {
-            let timestamp = frame.timestamp().ok().map(|value| value.Duration);
-            let result = self.inner.send_frame_with_audio(frame, audio_buffer);
-            if result.is_ok() {
-                self.health.record_video_success(timestamp);
-                self.health.record_audio_success(audio_buffer.len());
-            } else {
-                self.health.record_video_failure();
-                self.health.record_audio_failure();
             }
             result
         }
