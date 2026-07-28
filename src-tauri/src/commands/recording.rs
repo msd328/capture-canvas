@@ -55,5 +55,8 @@ pub async fn stop_recording(state: State<'_, AppState>) -> Result<RecordingOutpu
 
     state.library.recordings.write().insert(0, output.clone());
     state.library.persist()?;
+    state
+        .library
+        .schedule_thumbnail_async(output.id.clone(), output.file_path.clone());
     Ok(output)
 }
