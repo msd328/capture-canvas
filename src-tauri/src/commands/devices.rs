@@ -1,5 +1,4 @@
 use crate::{audio, camera, capture, recording::types::*};
-use tauri::State;
 
 #[tauri::command]
 pub fn list_displays() -> Vec<DisplayInfo> {
@@ -27,10 +26,7 @@ pub fn system_audio_supported() -> bool {
 }
 
 #[tauri::command]
-pub async fn capture_source_preview(
-    target: CaptureTarget,
-    _state: State<'_, crate::state::AppState>,
-) -> Result<CapturePreview, String> {
+pub async fn capture_source_preview(target: CaptureTarget) -> Result<CapturePreview, String> {
     tauri::async_runtime::spawn_blocking(move || capture::capture_source_preview(&target))
         .await
         .map_err(|error| format!("Source preview worker failed: {error}"))?
