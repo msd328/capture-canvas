@@ -172,9 +172,6 @@ pub fn start_native_video_capture(
 
 #[derive(Debug, Clone)]
 pub struct CaptureSource {
-    pub ffmpeg_input: String,
-    pub offset_x: Option<i32>,
-    pub offset_y: Option<i32>,
     pub width: u32,
     pub height: u32,
 }
@@ -378,13 +375,7 @@ mod windows_backend {
                     .ok_or_else(|| anyhow!("Selected display is no longer available"))?;
                 let width = (monitor.rect.right - monitor.rect.left).max(0) as u32;
                 let height = (monitor.rect.bottom - monitor.rect.top).max(0) as u32;
-                Ok(CaptureSource {
-                    ffmpeg_input: "desktop".to_string(),
-                    offset_x: Some(monitor.rect.left),
-                    offset_y: Some(monitor.rect.top),
-                    width,
-                    height,
-                })
+                Ok(CaptureSource { width, height })
             }
             CaptureKind::Window => {
                 let raw = target
@@ -402,21 +393,13 @@ mod windows_backend {
                         "Selected window is no longer available or capturable"
                     ));
                 }
-                let title = window_title(hwnd)
-                    .ok_or_else(|| anyhow!("Selected window no longer has a capturable title"))?;
                 let rect = visible_window_rect(hwnd)?;
                 let width = (rect.right - rect.left).max(0) as u32;
                 let height = (rect.bottom - rect.top).max(0) as u32;
                 if width < 2 || height < 2 {
                     return Err(anyhow!("Selected window has an invalid capture size"));
                 }
-                Ok(CaptureSource {
-                    ffmpeg_input: format!("title={title}"),
-                    offset_x: None,
-                    offset_y: None,
-                    width,
-                    height,
-                })
+                Ok(CaptureSource { width, height })
             }
         }
     }
