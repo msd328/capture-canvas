@@ -89,7 +89,7 @@ function RecordingPreviewPage() {
               poster={rec.thumbnailDataUrl ?? undefined}
               controls
               playsInline
-              preload="metadata"
+              preload="auto"
               onError={() => setVideoError(true)}
             />
           ) : (
