@@ -1,11 +1,9 @@
 //! Screen and window capture.
 //!
 //! Win32 remains responsible for enumerating and resolving selectable sources.
-//! Actual Windows recording frames come from Windows.Graphics.Capture/D3D11.
-//! The preferred path keeps screen video on D3D11, can mix microphone + system
-//! audio into one native AAC track, and composites the webcam directly onto the
-//! capture texture. FFmpeg remains only as a compatibility fallback when native
-//! Windows capture/encoding cannot be initialized.
+//! Actual Windows recording frames come from Windows.Graphics.Capture. Full-source
+//! recordings prefer direct D3D11 surfaces; selected-area and compatibility captures
+//! use a bounded CPU buffer with the same native Windows H.264/AAC encoder.
 
 use crate::recording::types::{
     CaptureKind, CapturePreview, CaptureTarget, DisplayInfo, WindowInfo,
@@ -27,7 +25,7 @@ pub enum NativeVideoCapture {
         capture: wgc_gpu::NativeGpuVideoCapture,
         metrics: metrics::CaptureSessionMetrics,
     },
-    Ffmpeg {
+    Buffer {
         capture: wgc::NativeVideoCapture,
         metrics: metrics::CaptureSessionMetrics,
     },
@@ -38,7 +36,7 @@ impl NativeVideoCapture {
     pub fn captures_system_audio(&self) -> bool {
         match self {
             Self::Gpu { capture, .. } => capture.captures_system_audio(),
-            Self::Ffmpeg { .. } => false,
+            Self::Buffer { capture, .. } => capture.captures_system_audio(),
         }
     }
 
@@ -50,7 +48,7 @@ impl NativeVideoCapture {
                 metrics.log_stopped(stop_started.elapsed(), result.is_ok());
                 result
             }
-            Self::Ffmpeg { capture, metrics } => {
+            Self::Buffer { capture, metrics } => {
                 let result = capture.stop();
                 metrics.log_stopped(stop_started.elapsed(), result.is_ok());
                 result
@@ -72,67 +70,93 @@ pub fn start_native_video_capture(
     let system_audio = config.system_audio;
     let fps = config.fps.clamp(1, 60);
 
-    // The first crop implementation uses the already-stable WGC latest-frame
-    // backend. The selected rectangle is applied before FFmpeg receives the frame,
-    // so the output contains only the requested area. Full-source recordings stay
-    // on the preferred D3D11/Media Foundation path.
-    if config.crop_region.is_none() {
-        let native_started = std::time::Instant::now();
-        match wgc_gpu::start_native_gpu_video_capture(config, target, width, height, output_path) {
-            Ok(capture) => {
-                let metrics = metrics::CaptureSessionMetrics::new(
-                    metrics::CaptureBackend::NativeGpu,
-                    output_path,
-                    native_started.elapsed(),
-                    width,
-                    height,
-                    fps,
-                    camera,
-                    microphone,
-                    system_audio,
-                );
-                metrics.log_started();
+    if config.crop_region.is_some() {
+        let started = std::time::Instant::now();
+        let capture = wgc::start_native_video_capture(config, target, width, height, output_path)?;
+        let metrics = metrics::CaptureSessionMetrics::new(
+            metrics::CaptureBackend::NativeBuffer,
+            output_path,
+            started.elapsed(),
+            width,
+            height,
+            fps,
+            camera,
+            microphone,
+            system_audio,
+        );
+        metrics.log_started();
 
-                if camera && microphone && system_audio {
-                    eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera + mixed microphone/system-audio active");
-                } else if microphone && system_audio {
-                    eprintln!("[Recorder] Native WGC/D3D11 H.264 + mixed microphone/system-audio active");
-                } else if camera && system_audio {
-                    eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera + system-audio active");
-                } else if camera && microphone {
-                    eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera + microphone active");
-                } else if camera {
-                    eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera active");
-                } else if system_audio {
-                    eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 + system-audio encoder active");
-                } else if microphone {
-                    eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 + microphone encoder active");
-                } else {
-                    eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 encoder active");
-                }
-                return Ok(NativeVideoCapture::Gpu { capture, metrics });
-            }
-            Err(native_error) => {
-                eprintln!(
-                    "[Recorder][Health] native_init_failed_ms={} error={native_error}",
-                    native_started.elapsed().as_millis(),
-                );
-                eprintln!(
-                    "[Recorder] Native Windows encoder unavailable ({native_error}); falling back to FFmpeg"
-                );
-                // Native MediaTranscoder setup can create the destination before a
-                // later initialization error. Clear a partial file before fallback.
-                let _ = std::fs::remove_file(output_path);
-            }
+        if camera && microphone && system_audio {
+            eprintln!("[Recorder] Native selected-area H.264 + camera + mixed microphone/system-audio active");
+        } else if microphone && system_audio {
+            eprintln!("[Recorder] Native selected-area H.264 + mixed microphone/system-audio active");
+        } else if camera && system_audio {
+            eprintln!("[Recorder] Native selected-area H.264 + camera + system-audio active");
+        } else if camera && microphone {
+            eprintln!("[Recorder] Native selected-area H.264 + camera + microphone active");
+        } else if camera {
+            eprintln!("[Recorder] Native selected-area H.264 + camera active");
+        } else if system_audio {
+            eprintln!("[Recorder] Native selected-area H.264 + system-audio active");
+        } else if microphone {
+            eprintln!("[Recorder] Native selected-area H.264 + microphone active");
+        } else {
+            eprintln!("[Recorder] Native selected-area Windows H.264 encoder active");
         }
-    } else {
-        eprintln!("[Recorder] Selected-area recording active through WGC crop compatibility backend");
+        return Ok(NativeVideoCapture::Buffer { capture, metrics });
+    }
+
+    let native_started = std::time::Instant::now();
+    match wgc_gpu::start_native_gpu_video_capture(config, target, width, height, output_path) {
+        Ok(capture) => {
+            let metrics = metrics::CaptureSessionMetrics::new(
+                metrics::CaptureBackend::NativeGpu,
+                output_path,
+                native_started.elapsed(),
+                width,
+                height,
+                fps,
+                camera,
+                microphone,
+                system_audio,
+            );
+            metrics.log_started();
+
+            if camera && microphone && system_audio {
+                eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera + mixed microphone/system-audio active");
+            } else if microphone && system_audio {
+                eprintln!("[Recorder] Native WGC/D3D11 H.264 + mixed microphone/system-audio active");
+            } else if camera && system_audio {
+                eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera + system-audio active");
+            } else if camera && microphone {
+                eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera + microphone active");
+            } else if camera {
+                eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera active");
+            } else if system_audio {
+                eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 + system-audio encoder active");
+            } else if microphone {
+                eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 + microphone encoder active");
+            } else {
+                eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 encoder active");
+            }
+            return Ok(NativeVideoCapture::Gpu { capture, metrics });
+        }
+        Err(native_error) => {
+            eprintln!(
+                "[Recorder][Health] native_init_failed_ms={} error={native_error}",
+                native_started.elapsed().as_millis(),
+            );
+            eprintln!(
+                "[Recorder] Native D3D11 encoder unavailable ({native_error}); falling back to native Windows buffer encoding"
+            );
+            let _ = std::fs::remove_file(output_path);
+        }
     }
 
     let fallback_started = std::time::Instant::now();
     let capture = wgc::start_native_video_capture(config, target, width, height, output_path)?;
     let metrics = metrics::CaptureSessionMetrics::new(
-        metrics::CaptureBackend::FfmpegFallback,
+        metrics::CaptureBackend::NativeBuffer,
         output_path,
         fallback_started.elapsed(),
         width,
@@ -143,7 +167,7 @@ pub fn start_native_video_capture(
         system_audio,
     );
     metrics.log_started();
-    Ok(NativeVideoCapture::Ffmpeg { capture, metrics })
+    Ok(NativeVideoCapture::Buffer { capture, metrics })
 }
 
 #[derive(Debug, Clone)]
@@ -253,17 +277,9 @@ mod windows_backend {
             return false;
         }
 
-        // windows-capture applies the same basic suitability checks used by the
-        // WGC backend: visible, top-level, not a tool window, and not owned by the
-        // Recorder process itself. DWM cloaking above additionally removes windows
-        // parked on another virtual desktop or retained only for background use.
         windows_capture::window::Window::from_raw_hwnd(hwnd.0).is_valid()
     }
 
-    /// Windows' GetWindowRect includes invisible resize borders on modern desktop
-    /// windows. WGC captures the visible DWM frame instead, so prefer the DWM
-    /// extended-frame bounds and retain GetWindowRect only as a compatibility
-    /// fallback. This keeps the encoder dimensions aligned with WGC frames.
     fn visible_window_rect(hwnd: HWND) -> Result<RECT> {
         let mut rect = RECT::default();
         let dwm = unsafe {
@@ -394,7 +410,6 @@ mod windows_backend {
                 if width < 2 || height < 2 {
                     return Err(anyhow!("Selected window has an invalid capture size"));
                 }
-                // Kept only as metadata/debug fallback; real frames now come from WGC via the HWND.
                 Ok(CaptureSource {
                     ffmpeg_input: format!("title={title}"),
                     offset_x: None,
