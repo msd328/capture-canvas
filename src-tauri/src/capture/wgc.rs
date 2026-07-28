@@ -1,6 +1,6 @@
 use crate::{
     audio, camera, encoding,
-    recording::types::{CaptureKind, CaptureTarget, RecordingConfig},
+    recording::types::{CaptureKind, CaptureTarget, CropRegion, RecordingConfig},
 };
 use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
@@ -41,12 +41,14 @@ struct PipeFlags {
     slot: Arc<Mutex<FrameSlot>>,
     width: u32,
     height: u32,
+    crop_region: Option<CropRegion>,
 }
 
 struct FramePipe {
     slot: Arc<Mutex<FrameSlot>>,
     width: u32,
     height: u32,
+    crop_region: Option<CropRegion>,
     scratch: Vec<u8>,
     next_frame: Vec<u8>,
 }
@@ -60,6 +62,7 @@ impl GraphicsCaptureApiHandler for FramePipe {
             slot: ctx.flags.slot,
             width: ctx.flags.width,
             height: ctx.flags.height,
+            crop_region: ctx.flags.crop_region,
             scratch: Vec::new(),
             next_frame: Vec::new(),
         })
@@ -87,7 +90,39 @@ impl GraphicsCaptureApiHandler for FramePipe {
         }
 
         self.next_frame.clear();
-        if frame_width == self.width && frame_height == self.height {
+        if let Some(crop) = self.crop_region {
+            let right = crop
+                .x
+                .checked_add(crop.width)
+                .ok_or_else(|| "Selected crop rectangle overflowed horizontally".to_string())?;
+            let bottom = crop
+                .y
+                .checked_add(crop.height)
+                .ok_or_else(|| "Selected crop rectangle overflowed vertically".to_string())?;
+            if right > frame_width || bottom > frame_height {
+                return Err(format!(
+                    "The selected crop area is outside the current source frame (crop {}x{} at {},{}; source {}x{})",
+                    crop.width, crop.height, crop.x, crop.y, frame_width, frame_height
+                ));
+            }
+            if crop.width != self.width || crop.height != self.height {
+                return Err(format!(
+                    "Crop output size changed unexpectedly ({}x{} -> {}x{})",
+                    crop.width, crop.height, self.width, self.height
+                ));
+            }
+
+            let output_len = self.width as usize * self.height as usize * 4;
+            self.next_frame.resize(output_len, 0);
+            let row_bytes = self.width as usize * 4;
+            for row in 0..self.height as usize {
+                let src_start =
+                    (((crop.y as usize + row) * frame_width as usize) + crop.x as usize) * 4;
+                let dst_start = row * row_bytes;
+                self.next_frame[dst_start..dst_start + row_bytes]
+                    .copy_from_slice(&bytes[src_start..src_start + row_bytes]);
+            }
+        } else if frame_width == self.width && frame_height == self.height {
             self.next_frame.extend_from_slice(bytes);
         } else {
             // FFmpeg rawvideo dimensions are fixed for a segment. WGC can resize
@@ -327,7 +362,10 @@ fn spawn_ffmpeg(
         .ok_or_else(|| anyhow!("FFmpeg rawvideo stdin was not available"))?;
 
     thread::sleep(Duration::from_millis(250));
-    if let Some(status) = child.try_wait().context("Unable to inspect FFmpeg process")? {
+    if let Some(status) = child
+        .try_wait()
+        .context("Unable to inspect FFmpeg process")?
+    {
         return Err(anyhow!(
             "FFmpeg stopped while starting WGC recording (exit code {})",
             status
@@ -370,6 +408,7 @@ where
             slot,
             width,
             height,
+            crop_region: config.crop_region,
         },
     );
 
@@ -406,7 +445,8 @@ pub fn start_native_video_capture(
                 .id
                 .strip_prefix("monitor-")
                 .ok_or_else(|| anyhow!("Invalid monitor id"))?;
-            let handle = usize::from_str_radix(raw, 16).map_err(|_| anyhow!("Invalid monitor id"))?;
+            let handle =
+                usize::from_str_radix(raw, 16).map_err(|_| anyhow!("Invalid monitor id"))?;
             let monitor = Monitor::from_raw_hmonitor(handle as *mut c_void);
             start_item(monitor, config, width, height, output_path)
         }
@@ -415,7 +455,8 @@ pub fn start_native_video_capture(
                 .id
                 .strip_prefix("window-")
                 .ok_or_else(|| anyhow!("Invalid window id"))?;
-            let handle = usize::from_str_radix(raw, 16).map_err(|_| anyhow!("Invalid window id"))?;
+            let handle =
+                usize::from_str_radix(raw, 16).map_err(|_| anyhow!("Invalid window id"))?;
             let window = Window::from_raw_hwnd(handle as *mut c_void);
             if !window.is_valid() {
                 return Err(anyhow!("Selected window is no longer capturable"));
