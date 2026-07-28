@@ -7,7 +7,7 @@ use parking_lot::Mutex;
 use std::ffi::c_void;
 use std::io::Write;
 use std::path::Path;
-use std::process::{Child, ChildStdin, Stdio};
+use std::process::{Child, ChildStdin, ExitStatus, Stdio};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -24,12 +24,9 @@ use windows_capture::settings::{
 };
 use windows_capture::window::Window;
 
-/// Latest-frame exchange between the WGC callback and the FFmpeg writer.
-///
-/// The callback publishes frames as fast as Windows produces them. The writer
-/// consumes only the newest frame at the requested recording FPS. Swapping the
-/// Vecs keeps the hot path allocation-free after the first few frames and,
-/// importantly, prevents a slow FFmpeg pipe from blocking Windows capture.
+const WRITER_STOP_GRACE: Duration = Duration::from_millis(750);
+const FFMPEG_EXIT_TIMEOUT: Duration = Duration::from_secs(3);
+
 #[derive(Default)]
 struct FrameSlot {
     frame: Vec<u8>,
@@ -77,7 +74,7 @@ impl GraphicsCaptureApiHandler for FramePipe {
         let frame_height = frame.height();
         let buffer = frame
             .buffer()
-            .map_err(|e| format!("Unable to map WGC frame: {e}"))?;
+            .map_err(|error| format!("Unable to map WGC frame: {error}"))?;
 
         self.scratch.clear();
         let bytes = buffer.as_nopadding_buffer(&mut self.scratch);
@@ -91,66 +88,13 @@ impl GraphicsCaptureApiHandler for FramePipe {
 
         self.next_frame.clear();
         if let Some(crop) = self.crop_region {
-            let right = crop
-                .x
-                .checked_add(crop.width)
-                .ok_or_else(|| "Selected crop rectangle overflowed horizontally".to_string())?;
-            let bottom = crop
-                .y
-                .checked_add(crop.height)
-                .ok_or_else(|| "Selected crop rectangle overflowed vertically".to_string())?;
-            if right > frame_width || bottom > frame_height {
-                return Err(format!(
-                    "The selected crop area is outside the current source frame (crop {}x{} at {},{}; source {}x{})",
-                    crop.width, crop.height, crop.x, crop.y, frame_width, frame_height
-                ));
-            }
-            if crop.width != self.width || crop.height != self.height {
-                return Err(format!(
-                    "Crop output size changed unexpectedly ({}x{} -> {}x{})",
-                    crop.width, crop.height, self.width, self.height
-                ));
-            }
-
-            let output_len = self.width as usize * self.height as usize * 4;
-            self.next_frame.resize(output_len, 0);
-            let row_bytes = self.width as usize * 4;
-            for row in 0..self.height as usize {
-                let src_start =
-                    (((crop.y as usize + row) * frame_width as usize) + crop.x as usize) * 4;
-                let dst_start = row * row_bytes;
-                self.next_frame[dst_start..dst_start + row_bytes]
-                    .copy_from_slice(&bytes[src_start..src_start + row_bytes]);
-            }
+            self.copy_crop(bytes, frame_width, frame_height, crop)?;
         } else if frame_width == self.width && frame_height == self.height {
             self.next_frame.extend_from_slice(bytes);
         } else {
-            // FFmpeg rawvideo dimensions are fixed for a segment. WGC can resize
-            // a window while recording, so normalize changed frames into the
-            // fixed encoder canvas. Larger frames are centre-cropped and smaller
-            // frames are centre-letterboxed with black.
-            let output_len = self.width as usize * self.height as usize * 4;
-            self.next_frame.resize(output_len, 0);
-
-            let copy_width = frame_width.min(self.width) as usize;
-            let copy_height = frame_height.min(self.height) as usize;
-            let src_x = ((frame_width as usize).saturating_sub(copy_width)) / 2;
-            let src_y = ((frame_height as usize).saturating_sub(copy_height)) / 2;
-            let dst_x = ((self.width as usize).saturating_sub(copy_width)) / 2;
-            let dst_y = ((self.height as usize).saturating_sub(copy_height)) / 2;
-            let row_bytes = copy_width * 4;
-
-            for row in 0..copy_height {
-                let src_start = ((src_y + row) * frame_width as usize + src_x) * 4;
-                let dst_start = ((dst_y + row) * self.width as usize + dst_x) * 4;
-                self.next_frame[dst_start..dst_start + row_bytes]
-                    .copy_from_slice(&bytes[src_start..src_start + row_bytes]);
-            }
+            self.copy_normalized(bytes, frame_width, frame_height);
         }
 
-        // Publish the newest complete frame with a cheap Vec swap. Do not write
-        // to FFmpeg here: a blocking pipe write would stall WGC and cause motion
-        // capture to degrade into large bursts of repeated frames.
         let mut slot = self.slot.lock();
         std::mem::swap(&mut slot.frame, &mut self.next_frame);
         slot.generation = slot.generation.wrapping_add(1);
@@ -162,6 +106,69 @@ impl GraphicsCaptureApiHandler for FramePipe {
     }
 }
 
+impl FramePipe {
+    fn copy_crop(
+        &mut self,
+        bytes: &[u8],
+        frame_width: u32,
+        frame_height: u32,
+        crop: CropRegion,
+    ) -> Result<(), String> {
+        let right = crop
+            .x
+            .checked_add(crop.width)
+            .ok_or_else(|| "Selected crop rectangle overflowed horizontally".to_string())?;
+        let bottom = crop
+            .y
+            .checked_add(crop.height)
+            .ok_or_else(|| "Selected crop rectangle overflowed vertically".to_string())?;
+        if right > frame_width || bottom > frame_height {
+            return Err(format!(
+                "The selected crop area is outside the current source frame (crop {}x{} at {},{}; source {}x{})",
+                crop.width, crop.height, crop.x, crop.y, frame_width, frame_height
+            ));
+        }
+        if crop.width != self.width || crop.height != self.height {
+            return Err(format!(
+                "Crop output size changed unexpectedly ({}x{} -> {}x{})",
+                crop.width, crop.height, self.width, self.height
+            ));
+        }
+
+        self.next_frame
+            .resize(self.width as usize * self.height as usize * 4, 0);
+        let row_bytes = self.width as usize * 4;
+        for row in 0..self.height as usize {
+            let src_start =
+                (((crop.y as usize + row) * frame_width as usize) + crop.x as usize) * 4;
+            let dst_start = row * row_bytes;
+            self.next_frame[dst_start..dst_start + row_bytes]
+                .copy_from_slice(&bytes[src_start..src_start + row_bytes]);
+        }
+        Ok(())
+    }
+
+    fn copy_normalized(&mut self, bytes: &[u8], frame_width: u32, frame_height: u32) {
+        self.next_frame
+            .resize(self.width as usize * self.height as usize * 4, 0);
+
+        let copy_width = frame_width.min(self.width) as usize;
+        let copy_height = frame_height.min(self.height) as usize;
+        let src_x = ((frame_width as usize).saturating_sub(copy_width)) / 2;
+        let src_y = ((frame_height as usize).saturating_sub(copy_height)) / 2;
+        let dst_x = ((self.width as usize).saturating_sub(copy_width)) / 2;
+        let dst_y = ((self.height as usize).saturating_sub(copy_height)) / 2;
+        let row_bytes = copy_width * 4;
+
+        for row in 0..copy_height {
+            let src_start = ((src_y + row) * frame_width as usize + src_x) * 4;
+            let dst_start = ((dst_y + row) * self.width as usize + dst_x) * 4;
+            self.next_frame[dst_start..dst_start + row_bytes]
+                .copy_from_slice(&bytes[src_start..src_start + row_bytes]);
+        }
+    }
+}
+
 fn spawn_frame_writer(
     mut stdin: ChildStdin,
     slot: Arc<Mutex<FrameSlot>>,
@@ -169,8 +176,7 @@ fn spawn_frame_writer(
     fps: u32,
 ) -> JoinHandle<Result<(), String>> {
     thread::spawn(move || {
-        let fps = fps.clamp(1, 60);
-        let frame_interval = Duration::from_secs_f64(1.0 / fps as f64);
+        let frame_interval = Duration::from_secs_f64(1.0 / fps.clamp(1, 60) as f64);
         let mut next_tick = Instant::now();
         let mut current_frame = Vec::<u8>::new();
         let mut seen_generation = 0u64;
@@ -184,9 +190,6 @@ fn spawn_frame_writer(
                 break;
             }
 
-            // Swap in the latest WGC frame only when a newer one exists. If the
-            // captured content is static, keep writing the last frame at a steady
-            // CFR cadence so real elapsed duration is preserved.
             {
                 let mut latest = slot.lock();
                 if latest.generation != seen_generation {
@@ -198,21 +201,16 @@ fn spawn_frame_writer(
             if !current_frame.is_empty() {
                 stdin
                     .write_all(&current_frame)
-                    .map_err(|e| format!("Unable to pipe paced WGC frame to FFmpeg: {e}"))?;
+                    .map_err(|error| format!("Unable to pipe paced WGC frame to FFmpeg: {error}"))?;
             }
 
             next_tick += frame_interval;
             let after_write = Instant::now();
             if next_tick <= after_write {
-                // Never try to catch up by dumping a burst of old frames. A late
-                // encoder tick should simply restart cadence from the current
-                // time; the next tick will use the freshest WGC frame available.
                 next_tick = after_write + frame_interval;
             }
         }
 
-        // Dropping stdin sends EOF to FFmpeg so it can flush the encoder and MP4
-        // trailer normally.
         drop(stdin);
         Ok(())
     })
@@ -227,34 +225,87 @@ pub struct NativeVideoCapture {
 
 impl NativeVideoCapture {
     pub fn stop(mut self) -> Result<()> {
-        let capture_result = if let Some(control) = self.control.take() {
-            control
-                .stop()
-                .map_err(|e| anyhow!("Unable to stop Windows Graphics Capture: {e}"))
-        } else {
-            Ok(())
-        };
+        let capture_result = self
+            .control
+            .take()
+            .map(|control| {
+                control
+                    .stop()
+                    .map_err(|error| anyhow!("Unable to stop Windows Graphics Capture: {error}"))
+            })
+            .unwrap_or(Ok(()));
 
         self.writer_stop.store(true, Ordering::Release);
+
+        // Give the writer a brief chance to observe the stop flag and drop FFmpeg's
+        // stdin normally. Never wait forever: a full pipe can leave write_all blocked.
+        if let Some(handle) = self.writer_thread.as_ref() {
+            let deadline = Instant::now() + WRITER_STOP_GRACE;
+            while !handle.is_finished() && Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(10));
+            }
+            if !handle.is_finished() {
+                eprintln!(
+                    "[Recorder][Health] warning=ffmpeg_writer_stop_timeout action=terminate_process"
+                );
+                let _ = self.child.kill();
+            }
+        }
+
         let writer_result = match self.writer_thread.take() {
             Some(handle) => match handle.join() {
-                Ok(result) => result.map_err(|e| anyhow!(e)),
+                Ok(result) => result.map_err(|error| anyhow!(error)),
                 Err(_) => Err(anyhow!("WGC frame writer thread terminated unexpectedly")),
             },
             None => Ok(()),
         };
 
-        let status = self
-            .child
-            .wait()
-            .context("Unable to finalize WGC recording segment")?;
+        let status_result = wait_for_child(&mut self.child, FFMPEG_EXIT_TIMEOUT);
 
         capture_result?;
         writer_result?;
+        let status = status_result?;
         if !status.success() {
-            return Err(anyhow!("FFmpeg could not finalize the WGC recording segment"));
+            return Err(anyhow!(
+                "FFmpeg could not finalize the WGC recording segment (exit code {})",
+                status
+                    .code()
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            ));
         }
         Ok(())
+    }
+}
+
+fn wait_for_child(child: &mut Child, timeout: Duration) -> Result<ExitStatus> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .context("Unable to inspect FFmpeg finalization")?
+        {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            eprintln!(
+                "[Recorder][Health] warning=ffmpeg_finalize_timeout timeout_ms={} action=terminate_process",
+                timeout.as_millis()
+            );
+            let _ = child.kill();
+            let status = child
+                .wait()
+                .context("Unable to terminate stalled FFmpeg finalization")?;
+            return Err(anyhow!(
+                "FFmpeg did not finalize the recording within {} ms (terminated with exit code {})",
+                timeout.as_millis(),
+                status
+                    .code()
+                    .map(|code| code.to_string())
+                    .unwrap_or_else(|| "unknown".to_string())
+            ));
+        }
+        thread::sleep(Duration::from_millis(15));
     }
 }
 
@@ -345,9 +396,19 @@ fn spawn_ffmpeg(
         cmd.arg("-an");
     }
 
-    let encoder = encoding::selected_h264_encoder();
-    encoding::apply_h264_options(&mut cmd, encoder);
-    cmd.args(["-r", &fps, "-movflags", "+faststart"]);
+    // The cropped compatibility backend must start immediately. Avoid the expensive
+    // first-use hardware-probe sequence here; the crop is usually smaller and the
+    // broadly available software encoder starts predictably.
+    encoding::apply_h264_options(&mut cmd, "libx264");
+    cmd.args([
+        "-r",
+        &fps,
+        "-shortest",
+        "-flush_packets",
+        "1",
+        "-movflags",
+        "+faststart",
+    ]);
     cmd.arg(output_path);
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -361,7 +422,9 @@ fn spawn_ffmpeg(
         .take()
         .ok_or_else(|| anyhow!("FFmpeg rawvideo stdin was not available"))?;
 
-    thread::sleep(Duration::from_millis(250));
+    // Do not add a fixed sleep to every Start click. A process that fails immediately
+    // is still detected here; later failures propagate through the writer/stop path.
+    thread::yield_now();
     if let Some(status) = child
         .try_wait()
         .context("Unable to inspect FFmpeg process")?
@@ -370,8 +433,8 @@ fn spawn_ffmpeg(
             "FFmpeg stopped while starting WGC recording (exit code {})",
             status
                 .code()
-                .map(|v| v.to_string())
-                .unwrap_or_else(|| "unknown".into())
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
         ));
     }
     Ok((child, stdin))
@@ -387,15 +450,12 @@ fn start_item<T>(
 where
     T: TryInto<GraphicsCaptureItemType> + Send + 'static,
 {
-    let (child, stdin) = spawn_ffmpeg(config, width, height, output_path)?;
+    let (mut child, stdin) = spawn_ffmpeg(config, width, height, output_path)?;
     let fps = config.fps.clamp(1, 60);
     let slot = Arc::new(Mutex::new(FrameSlot::default()));
     let writer_stop = Arc::new(AtomicBool::new(false));
     let writer_thread = spawn_frame_writer(stdin, slot.clone(), writer_stop.clone(), fps);
 
-    // Use platform defaults for optional WGC session properties. Border, cursor
-    // and minimum-update-interval toggles are version-gated Windows APIs. The
-    // dedicated writer thread above owns CFR pacing independently of WGC timing.
     let settings = Settings::new(
         item,
         CursorCaptureSettings::Default,
@@ -416,10 +476,10 @@ where
         Ok(control) => control,
         Err(error) => {
             writer_stop.store(true, Ordering::Release);
-            let _ = writer_thread.join();
-            let mut child = child;
+            // Terminate FFmpeg before joining so a writer blocked on the pipe is released.
             let _ = child.kill();
             let _ = child.wait();
+            let _ = writer_thread.join();
             return Err(anyhow!("Unable to start Windows Graphics Capture: {error}"));
         }
     };
@@ -447,8 +507,13 @@ pub fn start_native_video_capture(
                 .ok_or_else(|| anyhow!("Invalid monitor id"))?;
             let handle =
                 usize::from_str_radix(raw, 16).map_err(|_| anyhow!("Invalid monitor id"))?;
-            let monitor = Monitor::from_raw_hmonitor(handle as *mut c_void);
-            start_item(monitor, config, width, height, output_path)
+            start_item(
+                Monitor::from_raw_hmonitor(handle as *mut c_void),
+                config,
+                width,
+                height,
+                output_path,
+            )
         }
         CaptureKind::Window => {
             let raw = target
