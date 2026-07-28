@@ -12,6 +12,8 @@
 
 import type {
   CameraInfo,
+  CapturePreview,
+  CaptureTarget,
   DisplayInfo,
   MicrophoneInfo,
   RecorderSettings,
@@ -70,6 +72,21 @@ export async function listCameras(): Promise<CameraInfo[]> {
   ];
 }
 
+export async function captureSourcePreview(target: CaptureTarget): Promise<CapturePreview> {
+  const source =
+    target.kind === "display"
+      ? (await listDisplays()).find((item) => item.id === target.id)
+      : (await listWindows()).find((item) => item.id === target.id);
+  const width = source?.width ?? 1920;
+  const height = source?.height ?? 1080;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}"><rect width="100%" height="100%" fill="#202536"/><text x="50%" y="50%" text-anchor="middle" fill="white" font-family="sans-serif" font-size="48">Source preview</text></svg>`;
+  return {
+    dataUrl: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`,
+    width,
+    height,
+  };
+}
+
 // ---------- recording state ----------
 
 let activeRecording: { id: string; startedAt: number; pausedMs: number; pausedAt: number | null; config: RecordingConfig } | null = null;
@@ -99,8 +116,8 @@ export async function stopRecording(): Promise<RecordingOutput> {
     filePath: `~/Recordings/${activeRecording.id}.mp4`,
     createdAt: new Date().toISOString(),
     durationMs: Math.max(1000, duration),
-    width: 1920,
-    height: 1080,
+    width: activeRecording.config.cropRegion?.width ?? 1920,
+    height: activeRecording.config.cropRegion?.height ?? 1080,
     fileSizeBytes: Math.round((duration / 1000) * 1.8 * 1024 * 1024),
   };
   const all = readLS<RecordingOutput[]>(LS_RECORDINGS, []);
