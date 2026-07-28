@@ -1,0 +1,12 @@
+[package]
+name = "windows-capture-facade"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "windows_capture"
+path = "src/lib.rs"
+
+[dependencies]
+windows_capture_core = { package = "windows-capture", version = "2.0" }
