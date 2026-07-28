@@ -5,7 +5,6 @@ import type { RecorderError, RecordingConfig, RecordingOutput, RecordingStatus }
 interface UseRecorderResult {
   status: RecordingStatus;
   elapsedMs: number;
-  countdown: number | null;
   error: RecorderError | null;
   start: (config: RecordingConfig) => Promise<void>;
   pause: () => Promise<void>;
@@ -32,40 +31,39 @@ function errorMessage(error: unknown, fallback: string): string {
 
 export function useRecorder(): UseRecorderResult {
   const [status, setStatus] = useState<RecordingStatus>("idle");
-  const [countdown, setCountdown] = useState<number | null>(null);
   const [error, setError] = useState<RecorderError | null>(null);
   const [elapsedMs, setElapsedMs] = useState(0);
   const startedAtRef = useRef<number | null>(null);
   const pausedAccumRef = useRef(0);
   const pausedAtRef = useRef<number | null>(null);
-  const rafRef = useRef<number | null>(null);
+  const transitionRef = useRef(false);
 
-  const tick = useCallback(() => {
+  const updateElapsed = useCallback(() => {
     if (startedAtRef.current !== null && pausedAtRef.current === null) {
       setElapsedMs(Date.now() - startedAtRef.current - pausedAccumRef.current);
     }
-    rafRef.current = requestAnimationFrame(tick);
   }, []);
 
   useEffect(() => {
-    if (status === "recording" || status === "paused") {
-      rafRef.current = requestAnimationFrame(tick);
-      return () => {
-        if (rafRef.current) cancelAnimationFrame(rafRef.current);
-      };
-    }
-  }, [status, tick]);
+    if (status !== "recording") return;
+
+    // The previous requestAnimationFrame loop re-rendered the entire recording
+    // page about 60 times per second. A recorder clock only needs a few updates
+    // per second, and lowering this frequency keeps control clicks responsive.
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 250);
+    return () => window.clearInterval(timer);
+  }, [status, updateElapsed]);
 
   const start = useCallback(async (config: RecordingConfig) => {
+    if (transitionRef.current) return;
+    transitionRef.current = true;
     setError(null);
     setStatus("preparing");
+
     try {
-      setStatus("countdown");
-      for (let i = 3; i >= 1; i--) {
-        setCountdown(i);
-        await new Promise((r) => setTimeout(r, 900));
-      }
-      setCountdown(null);
+      // Start immediately. A configurable countdown can be reintroduced later,
+      // but it should not add unavoidable latency to every recording.
       await desktop.startRecording(config);
       startedAtRef.current = Date.now();
       pausedAccumRef.current = 0;
@@ -76,34 +74,73 @@ export function useRecorder(): UseRecorderResult {
       const message = errorMessage(e, "Failed to start recording");
       console.error("Recorder start failed:", e);
       setError({ code: "InitFailed", message });
-      // Return to idle so a device/setting can be changed and the user can retry
-      // without reloading the whole desktop application.
       setStatus("idle");
-      setCountdown(null);
+    } finally {
+      transitionRef.current = false;
     }
   }, []);
 
   const pause = useCallback(async () => {
-    await desktop.pauseRecording();
-    pausedAtRef.current = Date.now();
-    setStatus("paused");
+    if (transitionRef.current) return;
+    transitionRef.current = true;
+    setError(null);
+
+    const now = Date.now();
+    if (startedAtRef.current !== null) {
+      setElapsedMs(now - startedAtRef.current - pausedAccumRef.current);
+    }
+    pausedAtRef.current = now;
+    setStatus("pausing");
+
+    try {
+      await desktop.pauseRecording();
+      setStatus("paused");
+    } catch (e) {
+      const message = errorMessage(e, "Failed to pause recording");
+      console.error("Recorder pause failed:", e);
+      pausedAtRef.current = null;
+      setError({ code: "EncoderFailed", message });
+      setStatus("recording");
+    } finally {
+      transitionRef.current = false;
+    }
   }, []);
 
   const resume = useCallback(async () => {
-    await desktop.resumeRecording();
-    if (pausedAtRef.current) {
-      pausedAccumRef.current += Date.now() - pausedAtRef.current;
-      pausedAtRef.current = null;
+    if (transitionRef.current) return;
+    transitionRef.current = true;
+    setError(null);
+    setStatus("resuming");
+
+    try {
+      await desktop.resumeRecording();
+      if (pausedAtRef.current !== null) {
+        pausedAccumRef.current += Date.now() - pausedAtRef.current;
+        pausedAtRef.current = null;
+      }
+      setStatus("recording");
+    } catch (e) {
+      const message = errorMessage(e, "Failed to resume recording");
+      console.error("Recorder resume failed:", e);
+      setError({ code: "EncoderFailed", message });
+      setStatus("paused");
+    } finally {
+      transitionRef.current = false;
     }
-    setStatus("recording");
   }, []);
 
   const stop = useCallback(async () => {
+    if (transitionRef.current) return null;
+    transitionRef.current = true;
+    setError(null);
     setStatus("stopping");
+
     try {
       const out = await desktop.stopRecording();
       setStatus("idle");
       startedAtRef.current = null;
+      pausedAccumRef.current = 0;
+      pausedAtRef.current = null;
       setElapsedMs(0);
       return out;
     } catch (e) {
@@ -112,20 +149,22 @@ export function useRecorder(): UseRecorderResult {
       setError({ code: "EncoderFailed", message });
       setStatus("error");
       return null;
+    } finally {
+      transitionRef.current = false;
     }
   }, []);
 
   const reset = useCallback(() => {
+    transitionRef.current = false;
     setStatus("idle");
     setError(null);
     setElapsedMs(0);
-    setCountdown(null);
     startedAtRef.current = null;
     pausedAccumRef.current = 0;
     pausedAtRef.current = null;
   }, []);
 
-  return { status, elapsedMs, countdown, error, start, pause, resume, stop, reset };
+  return { status, elapsedMs, error, start, pause, resume, stop, reset };
 }
 
 export function formatElapsed(ms: number): string {
