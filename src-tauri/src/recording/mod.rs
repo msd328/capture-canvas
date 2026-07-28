@@ -35,6 +35,8 @@ struct ActiveRecording {
     current_video: Option<capture::NativeVideoCapture>,
     current_system_audio: Option<audio::SystemAudioCapture>,
     external_system_audio: bool,
+    source_width: u32,
+    source_height: u32,
     width: u32,
     height: u32,
 }
@@ -49,22 +51,22 @@ impl RecordingEngine {
         Arc::new(Self::default())
     }
 
-    pub fn start(&self, config: RecordingConfig) -> Result<String> {
+    pub fn start(&self, mut config: RecordingConfig) -> Result<String> {
         let mut guard = self.active.lock();
         if guard.is_some() {
             return Err(anyhow!("A recording is already in progress"));
         }
         if config.system_audio && !audio::system_audio_supported() {
-            return Err(anyhow!("Windows has no usable default audio output endpoint for system-audio capture"));
+            return Err(anyhow!(
+                "Windows has no usable default audio output endpoint for system-audio capture"
+            ));
         }
 
         let id = Uuid::new_v4().to_string();
         let source = capture::resolve_target(&config.target)?;
-        let width = source.width & !1;
-        let height = source.height & !1;
-        if width == 0 || height == 0 {
-            return Err(anyhow!("The selected capture source has an invalid size"));
-        }
+        let source_width = source.width;
+        let source_height = source.height;
+        let (width, height) = normalize_crop_region(&mut config, source_width, source_height)?;
 
         let final_path = output_path_for(&id, config.output_path.as_deref())?;
         if let Some(parent) = final_path.parent() {
@@ -73,7 +75,13 @@ impl RecordingEngine {
         }
 
         let first_segment = segment_path(&final_path, &id, 0);
-        let video = capture::start_native_video_capture(&config, &config.target, width, height, &first_segment)?;
+        let video = capture::start_native_video_capture(
+            &config,
+            &config.target,
+            width,
+            height,
+            &first_segment,
+        )?;
         let external_system_audio = config.system_audio && !video.captures_system_audio();
 
         // The preferred GPU backend owns system audio itself. An external WAV is
@@ -113,6 +121,8 @@ impl RecordingEngine {
             current_video: Some(video),
             current_system_audio,
             external_system_audio,
+            source_width,
+            source_height,
             width,
             height,
         });
@@ -148,21 +158,25 @@ impl RecordingEngine {
         // Resolve again so disconnected monitors/closed windows produce a useful
         // resume error rather than silently continuing against a stale handle.
         let source = capture::resolve_target(&rec.config.target)?;
-        let width = source.width & !1;
-        let height = source.height & !1;
-        if width != rec.width || height != rec.height {
+        if source.width != rec.source_width || source.height != rec.source_height {
             return Err(anyhow!(
                 "The capture source size changed while paused ({}x{} -> {}x{}). Restore the original size and resume again.",
-                rec.width,
-                rec.height,
-                width,
-                height
+                rec.source_width,
+                rec.source_height,
+                source.width,
+                source.height
             ));
         }
 
         let next_index = rec.segment_paths.len();
         let path = segment_path(&rec.final_path, &rec.id, next_index);
-        let video = capture::start_native_video_capture(&rec.config, &rec.config.target, rec.width, rec.height, &path)?;
+        let video = capture::start_native_video_capture(
+            &rec.config,
+            &rec.config.target,
+            rec.width,
+            rec.height,
+            &path,
+        )?;
         let segment_external_system_audio =
             rec.config.system_audio && !video.captures_system_audio();
 
@@ -215,8 +229,13 @@ impl RecordingEngine {
         }
 
         let paused = rec.paused_total_ms
-            + rec.paused_at.map(|at| at.elapsed().as_millis() as u64).unwrap_or(0);
-        let duration_ms = (Instant::now().duration_since(rec.started_at).as_millis() as u64)
+            + rec
+                .paused_at
+                .map(|at| at.elapsed().as_millis() as u64)
+                .unwrap_or(0);
+        let duration_ms = (Instant::now()
+            .duration_since(rec.started_at)
+            .as_millis() as u64)
             .saturating_sub(paused)
             .max(1);
 
@@ -231,8 +250,12 @@ impl RecordingEngine {
         };
 
         finalize_segments(&final_segments, &rec.final_path)?;
-        let metadata = fs::metadata(&rec.final_path)
-            .with_context(|| format!("Recording file was not created: {}", rec.final_path.display()))?;
+        let metadata = fs::metadata(&rec.final_path).with_context(|| {
+            format!(
+                "Recording file was not created: {}",
+                rec.final_path.display()
+            )
+        })?;
         if metadata.len() == 0 {
             return Err(anyhow!("Recording completed but the MP4 file is empty"));
         }
@@ -243,7 +266,9 @@ impl RecordingEngine {
 
         Ok(RecordingOutput {
             id: rec.id,
-            title: rec.config.title.unwrap_or_else(|| format!("Recording {}", Utc::now().format("%Y-%m-%d %H:%M"))),
+            title: rec.config.title.unwrap_or_else(|| {
+                format!("Recording {}", Utc::now().format("%Y-%m-%d %H:%M"))
+            }),
             file_path: rec.final_path.to_string_lossy().to_string(),
             created_at: Utc::now().to_rfc3339(),
             duration_ms,
@@ -253,6 +278,62 @@ impl RecordingEngine {
             thumbnail_data_url,
         })
     }
+}
+
+fn normalize_crop_region(
+    config: &mut RecordingConfig,
+    source_width: u32,
+    source_height: u32,
+) -> Result<(u32, u32)> {
+    let full_width = source_width & !1;
+    let full_height = source_height & !1;
+    if full_width < 2 || full_height < 2 {
+        return Err(anyhow!("The selected capture source has an invalid size"));
+    }
+
+    let Some(mut crop) = config.crop_region else {
+        return Ok((full_width, full_height));
+    };
+
+    crop.width &= !1;
+    crop.height &= !1;
+    if crop.width < 64 || crop.height < 64 {
+        return Err(anyhow!(
+            "The selected recording area must be at least 64 × 64 pixels"
+        ));
+    }
+
+    let right = crop
+        .x
+        .checked_add(crop.width)
+        .ok_or_else(|| anyhow!("The selected recording area overflowed horizontally"))?;
+    let bottom = crop
+        .y
+        .checked_add(crop.height)
+        .ok_or_else(|| anyhow!("The selected recording area overflowed vertically"))?;
+    if right > source_width || bottom > source_height {
+        return Err(anyhow!(
+            "The selected recording area ({}x{} at {},{}) is outside the source ({}x{})",
+            crop.width,
+            crop.height,
+            crop.x,
+            crop.y,
+            source_width,
+            source_height
+        ));
+    }
+
+    if crop.x == 0
+        && crop.y == 0
+        && crop.width == full_width
+        && crop.height == full_height
+    {
+        config.crop_region = None;
+        return Ok((full_width, full_height));
+    }
+
+    config.crop_region = Some(crop);
+    Ok((crop.width, crop.height))
 }
 
 fn output_path_for(id: &str, requested: Option<&str>) -> Result<PathBuf> {
@@ -271,7 +352,10 @@ fn expand_tilde(path: &str) -> PathBuf {
             return PathBuf::from(home);
         }
     }
-    if let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
+    if let Some(rest) = path
+        .strip_prefix("~/")
+        .or_else(|| path.strip_prefix("~\\"))
+    {
         if let Some(home) = std::env::var_os("USERPROFILE") {
             return PathBuf::from(home).join(rest.replace('/', "\\"));
         }
@@ -291,13 +375,22 @@ fn system_audio_path(final_path: &Path, id: &str, index: usize) -> PathBuf {
 
 fn mixed_segment_path(segment: &Path) -> PathBuf {
     let parent = segment.parent().unwrap_or_else(|| Path::new("."));
-    let stem = segment.file_stem().and_then(|value| value.to_str()).unwrap_or("segment");
+    let stem = segment
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("segment");
     parent.join(format!("{stem}.mixed.mp4"))
 }
 
-fn mix_native_system_audio_segments(video_segments: &[PathBuf], system_tracks: &[PathBuf], has_microphone: bool) -> Result<Vec<PathBuf>> {
+fn mix_native_system_audio_segments(
+    video_segments: &[PathBuf],
+    system_tracks: &[PathBuf],
+    has_microphone: bool,
+) -> Result<Vec<PathBuf>> {
     if video_segments.len() != system_tracks.len() {
-        return Err(anyhow!("System-audio segment count does not match video segment count"));
+        return Err(anyhow!(
+            "System-audio segment count does not match video segment count"
+        ));
     }
 
     let mut outputs = Vec::with_capacity(video_segments.len());
@@ -313,27 +406,43 @@ fn mix_native_system_audio_segments(video_segments: &[PathBuf], system_tracks: &
         let output = mixed_segment_path(video);
         let mut cmd = encoding::ffmpeg_command();
         cmd.args(["-hide_banner", "-loglevel", "warning", "-y"])
-            .arg("-i").arg(video)
-            .arg("-i").arg(system);
+            .arg("-i")
+            .arg(video)
+            .arg("-i")
+            .arg(system);
 
         if has_microphone {
             cmd.args([
                 "-filter_complex",
                 "[0:a]aresample=async=1:first_pts=0[mic];[1:a]aresample=async=1:first_pts=0[sys];[mic][sys]amix=inputs=2:duration=first:dropout_transition=2[a]",
-                "-map", "0:v:0",
-                "-map", "[a]",
+                "-map",
+                "0:v:0",
+                "-map",
+                "[a]",
             ]);
         } else {
             cmd.args(["-map", "0:v:0", "-map", "1:a:0"]);
         }
 
         let status = cmd
-            .args(["-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart"])
+            .args([
+                "-c:v",
+                "copy",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-shortest",
+                "-movflags",
+                "+faststart",
+            ])
             .arg(&output)
             .status()
             .context("Unable to mix native Windows system audio into recording")?;
         if !status.success() {
-            return Err(anyhow!("FFmpeg could not mux the native system-audio track"));
+            return Err(anyhow!(
+                "FFmpeg could not mux the native system-audio track"
+            ));
         }
 
         let _ = fs::remove_file(video);
@@ -364,7 +473,9 @@ fn finalize_segments(segments: &[PathBuf], final_path: &Path) -> Result<()> {
     {
         match windows_media::concatenate_segments(segments, final_path) {
             Ok(()) => {
-                eprintln!("[Recorder] Native Windows MediaComposition pause/resume finalizer active");
+                eprintln!(
+                    "[Recorder] Native Windows MediaComposition pause/resume finalizer active"
+                );
                 return Ok(());
             }
             Err(error) => {
@@ -383,13 +494,26 @@ fn finalize_segments(segments: &[PathBuf], final_path: &Path) -> Result<()> {
     let list_path = final_path.with_extension("concat.txt");
     let mut body = String::new();
     for segment in segments {
-        let normalized = segment.to_string_lossy().replace('\\', "/").replace('\'', "'\\''");
+        let normalized = segment
+            .to_string_lossy()
+            .replace('\\', "/")
+            .replace('\'', "'\\''");
         body.push_str(&format!("file '{normalized}'\n"));
     }
     fs::write(&list_path, body).context("Unable to create FFmpeg concat list")?;
 
     let status = encoding::ffmpeg_command()
-        .args(["-hide_banner", "-loglevel", "warning", "-y", "-f", "concat", "-safe", "0", "-i"])
+        .args([
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-y",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+        ])
         .arg(&list_path)
         .args(["-c", "copy", "-movflags", "+faststart"])
         .arg(final_path)
@@ -397,7 +521,9 @@ fn finalize_segments(segments: &[PathBuf], final_path: &Path) -> Result<()> {
         .context("Unable to concatenate recording segments")?;
     let _ = fs::remove_file(&list_path);
     if !status.success() {
-        return Err(anyhow!("FFmpeg could not concatenate paused recording segments"));
+        return Err(anyhow!(
+            "FFmpeg could not concatenate paused recording segments"
+        ));
     }
     Ok(())
 }
