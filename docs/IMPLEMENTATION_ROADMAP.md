@@ -19,7 +19,7 @@ must provide the validation evidence.
 
 ## Current focus
 
-1. Revalidate the instrumented `windows_capture` facade after the Rust 2021 namespace fix.
+1. Revalidate the instrumented external `windows_capture` facade after replacing the conflicting crate-root alias.
 2. Validate timeline coverage diagnostics on Windows.
 3. Complete WGC frame-delivery/FPS-limiter, camera, and audio-mixer counters.
 4. Verify and fix static-screen duration continuity.
@@ -56,7 +56,7 @@ must provide the validation evidence.
 | VID-05 | ✅ | Resolution-dependent bitrate selection | Health logs show expected output bitrate range |
 | VID-06 | ✅ | FPS limiting on high-refresh displays | Requested FPS is bounded |
 | VID-07 | 🟡 | Background H.264/AAC encoder warm-up | Compare first Start latency before/after warm-up |
-| VID-08 | 🟡 | Encoder submission counters | Initial Windows build failed with unresolved facade namespace; fix committed in `4c18cde`, rebuild pending |
+| VID-08 | 🟡 | Encoder submission counters | E0433 then E0255/E0432 exposed facade namespace collisions; replaced with local external facade crate through `fcc6b10`, rebuild pending |
 | VID-09 | 🔵 | WGC received/skipped/encoded counters | Log received, rate-limited, encoded, failed counts |
 | VID-10 | 🔵 | Static-screen duration continuity | 60 seconds static produces approximately 60 seconds output; timeline deficit diagnostics are available |
 | VID-11 | 🔵 | Pure D3D11 selected-area crop | No CPU BGRA crop copy |
@@ -129,10 +129,10 @@ must provide the validation evidence.
 | HLT-02 | ✅ | Encoder startup duration | `start_ms` emitted |
 | HLT-03 | ✅ | Stop/finalisation duration | `stop_ms` emitted |
 | HLT-04 | ✅ | Output size and average bitrate | Bytes/Mbps emitted |
-| HLT-05 | 🟡 | Submitted frames and failures | Facade rebuild/runtime pending after namespace fix |
-| HLT-06 | 🟡 | Effective encoded FPS | Facade rebuild/runtime pending after namespace fix |
-| HLT-07 | 🟡 | Largest submitted-frame gap | Facade rebuild/runtime pending after namespace fix |
-| HLT-08 | 🟡 | Audio buffers and bytes submitted | Facade rebuild/runtime pending after namespace fix |
+| HLT-05 | 🟡 | Submitted frames and failures | Rebuild/runtime pending after moving facade into a local external crate |
+| HLT-06 | 🟡 | Effective encoded FPS | Rebuild/runtime pending after moving facade into a local external crate |
+| HLT-07 | 🟡 | Largest submitted-frame gap | Rebuild/runtime pending after moving facade into a local external crate |
+| HLT-08 | 🟡 | Audio buffers and bytes submitted | Rebuild/runtime pending after moving facade into a local external crate |
 | HLT-09 | 🔵 | WGC frames received | Capture-handler counter |
 | HLT-10 | 🔵 | FPS-limited frames skipped | Capture-handler counter |
 | HLT-11 | 🔵 | Camera frames received/applied | Camera/capture counters |
@@ -140,7 +140,7 @@ must provide the validation evidence.
 | HLT-13 | 🔵 | Audio/video drift | Millisecond drift report |
 | HLT-14 | ⚪ | Exportable diagnostic report | Copy/save support bundle |
 | HLT-15 | ⚪ | User-friendly health summary | Non-technical UI status |
-| HLT-16 | 🟡 | Expected-frame timeline coverage and deficit | Initial Windows build blocked by facade namespace; rebuild pending after `4c18cde` |
+| HLT-16 | 🟡 | Expected-frame timeline coverage and deficit | Two namespace builds failed before runtime; local external facade through `fcc6b10` awaits Windows rebuild |
 
 ## Recording library
 
@@ -282,4 +282,5 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-28 | `c688bc7` baseline | Added formal tracking after encoder submission instrumentation |
 | 2026-07-28 | `02f950e` | Added repository roadmap and validation policy |
 | 2026-07-28 | `d0b4708` | Added expected-frame timeline coverage and deficit diagnostics; HLT-16 → 🟡 |
-| 2026-07-28 | `4c18cde` | Fixed Rust 2021 crate-local `windows_capture` facade resolution after E0433 build failure; validation remains pending |
+| 2026-07-28 | `4c18cde` | First namespace repair after E0433 build failure; second Windows build exposed root `capture` collision |
+| 2026-07-28 | `840efeb..fcc6b10` | Replaced the conflicting crate-root alias with a local external `windows_capture` facade crate; VID-08 and HLT-05–08/16 remain 🟡 pending rebuild |
