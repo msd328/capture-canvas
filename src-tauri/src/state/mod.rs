@@ -51,22 +51,26 @@ impl LibraryStore {
     pub fn schedule_thumbnail_async(&self, id: String, file_path: String) {
         let recordings = Arc::clone(&self.recordings);
         let metadata_path = self.path.clone();
+        let worker_id = id.clone();
+        let worker_path = file_path.clone();
         let spawn_result = std::thread::Builder::new()
             .name("recorder-thumbnail".to_string())
             .spawn(move || {
                 let started = std::time::Instant::now();
                 let Some(thumbnail) =
-                    encoding::generate_thumbnail_data_url(Path::new(&file_path))
+                    encoding::generate_thumbnail_data_url(Path::new(&worker_path))
                 else {
                     eprintln!(
-                        "[Recorder][Health] thumbnail_ok=false id={id} path={file_path}"
+                        "[Recorder][Health] thumbnail_ok=false id={worker_id} path={worker_path}"
                     );
                     return;
                 };
 
                 let changed = {
                     let mut guard = recordings.write();
-                    let Some(recording) = guard.iter_mut().find(|recording| recording.id == id)
+                    let Some(recording) = guard
+                        .iter_mut()
+                        .find(|recording| recording.id == worker_id)
                     else {
                         return;
                     };
@@ -81,11 +85,11 @@ impl LibraryStore {
                 if changed {
                     if let Err(error) = write_json(&metadata_path, &*recordings.read()) {
                         eprintln!(
-                            "[Recorder][Health] thumbnail_persist_ok=false id={id} error={error}"
+                            "[Recorder][Health] thumbnail_persist_ok=false id={worker_id} error={error}"
                         );
                     } else {
                         eprintln!(
-                            "[Recorder][Health] thumbnail_ok=true id={id} thumbnail_ms={}",
+                            "[Recorder][Health] thumbnail_ok=true id={worker_id} thumbnail_ms={}",
                             started.elapsed().as_millis()
                         );
                     }
@@ -94,7 +98,7 @@ impl LibraryStore {
 
         if let Err(error) = spawn_result {
             eprintln!(
-                "[Recorder][Health] thumbnail_ok=false id={id} error=unable_to_spawn_thumbnail_worker:{error}"
+                "[Recorder][Health] thumbnail_ok=false id={id} path={file_path} error=unable_to_spawn_thumbnail_worker:{error}"
             );
         }
     }
