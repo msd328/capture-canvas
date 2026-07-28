@@ -21,6 +21,13 @@ fn main() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_opener::init())
+        .setup(|_| {
+            // Media Foundation normally pays a large one-time codec startup cost on
+            // the first recording. Exercise the native H.264/AAC path in a background
+            // thread while the frontend is loading so Start remains responsive.
+            encoding::warm_native_capture_pipeline_async();
+            Ok(())
+        })
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
             commands::devices::list_displays,
