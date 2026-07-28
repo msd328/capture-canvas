@@ -19,7 +19,7 @@ must provide the validation evidence.
 
 ## Current focus
 
-1. Revalidate the local external `windows_capture` facade with delivery/limiter counters on Windows.
+1. Revalidate the local external `windows_capture` facade after the E0597 callback-guard lifetime fix.
 2. Validate timeline coverage and WGC delivery diagnostics on Windows.
 3. Complete camera and audio-mixer counters.
 4. Verify and fix static-screen duration continuity.
@@ -56,7 +56,7 @@ must provide the validation evidence.
 | VID-05 | ✅ | Resolution-dependent bitrate selection | Health logs show expected output bitrate range |
 | VID-06 | ✅ | FPS limiting on high-refresh displays | Requested FPS is bounded |
 | VID-07 | 🟡 | Background H.264/AAC encoder warm-up | Compare first Start latency before/after warm-up |
-| VID-08 | 🟡 | Encoder submission counters | Local external facade plus wrapper rebuild/runtime pending |
+| VID-08 | 🟡 | Encoder submission counters | Facade reached compilation; E0597 callback-guard lifetime fixed in `7f051ed`, rebuild/runtime pending |
 | VID-09 | 🟡 | WGC received/skipped/encoded counters | Central facade counter implemented; validate `frames_received`, `frames_rate_limited`, submissions and failures |
 | VID-10 | 🔵 | Static-screen duration continuity | 60 seconds static produces approximately 60 seconds output; timeline deficit diagnostics are available |
 | VID-11 | 🔵 | Pure D3D11 selected-area crop | No CPU BGRA crop copy |
@@ -129,18 +129,18 @@ must provide the validation evidence.
 | HLT-02 | ✅ | Encoder startup duration | `start_ms` emitted |
 | HLT-03 | ✅ | Stop/finalisation duration | `stop_ms` emitted |
 | HLT-04 | ✅ | Output size and average bitrate | Bytes/Mbps emitted |
-| HLT-05 | 🟡 | Submitted frames and failures | Local external facade rebuild/runtime pending |
-| HLT-06 | 🟡 | Effective encoded FPS | Local external facade rebuild/runtime pending |
-| HLT-07 | 🟡 | Largest submitted-frame gap | Local external facade rebuild/runtime pending |
-| HLT-08 | 🟡 | Audio buffers and bytes submitted | Local external facade rebuild/runtime pending |
-| HLT-09 | 🟡 | WGC frames received | Facade handler wrapper implemented; Windows runtime pending |
-| HLT-10 | 🟡 | FPS-limited frames skipped | Timestamp/target-FPS limiter mirror implemented; Windows runtime pending |
+| HLT-05 | 🟡 | Submitted frames and failures | E0597 callback-guard fix committed; rebuild/runtime pending |
+| HLT-06 | 🟡 | Effective encoded FPS | E0597 callback-guard fix committed; rebuild/runtime pending |
+| HLT-07 | 🟡 | Largest submitted-frame gap | E0597 callback-guard fix committed; rebuild/runtime pending |
+| HLT-08 | 🟡 | Audio buffers and bytes submitted | E0597 callback-guard fix committed; rebuild/runtime pending |
+| HLT-09 | 🟡 | WGC frames received | Facade handler wrapper implemented; rebuild/runtime pending after E0597 fix |
+| HLT-10 | 🟡 | FPS-limited frames skipped | Timestamp/target-FPS limiter mirror implemented; rebuild/runtime pending after E0597 fix |
 | HLT-11 | 🔵 | Camera frames received/applied | Camera/capture counters |
 | HLT-12 | 🔵 | Mixer underruns and queue overflows | Mixer counters |
 | HLT-13 | 🔵 | Audio/video drift | Millisecond drift report |
 | HLT-14 | ⚪ | Exportable diagnostic report | Copy/save support bundle |
 | HLT-15 | ⚪ | User-friendly health summary | Non-technical UI status |
-| HLT-16 | 🟡 | Expected-frame timeline coverage and deficit | Local external facade awaits successful Windows rebuild/runtime |
+| HLT-16 | 🟡 | Expected-frame timeline coverage and deficit | Facade rebuild/runtime pending after E0597 callback-guard fix |
 
 ## Recording library
 
@@ -285,3 +285,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-28 | `4c18cde` | First namespace repair after E0433 build failure; second Windows build exposed root `capture` collision |
 | 2026-07-28 | `840efeb..fcc6b10` | Replaced the conflicting crate-root alias with a local external `windows_capture` facade crate; VID-08 and HLT-05–08/16 remain 🟡 pending rebuild |
 | 2026-07-28 | `e949aba..b52ae4a` | Added central WGC delivery, FPS-limiter, capture-gap and processing-deficit counters; VID-09 and HLT-09/10 → 🟡 |
+| 2026-07-28 | `885ba57..7f051ed` | Fixed E0597 callback guard lifetime through the Rust 2024 facade entry wrapper and removed the unused `Instant` warning; validation remains pending |
