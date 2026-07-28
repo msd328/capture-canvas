@@ -7,7 +7,7 @@ use crate::{
     encoding,
     recording::{types::*, RecordingEngine},
 };
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fs;
@@ -18,6 +18,7 @@ use std::sync::Arc;
 pub struct LibraryStore {
     pub recordings: Arc<RwLock<Vec<RecordingOutput>>>,
     path: PathBuf,
+    persist_lock: Arc<Mutex<()>>,
 }
 
 impl LibraryStore {
@@ -35,6 +36,7 @@ impl LibraryStore {
         let store = Self {
             recordings: Arc::new(RwLock::new(recordings)),
             path,
+            persist_lock: Arc::new(Mutex::new(())),
         };
         let _ = store.persist();
         store.refresh_thumbnails_async();
@@ -42,6 +44,7 @@ impl LibraryStore {
     }
 
     pub fn persist(&self) -> Result<(), String> {
+        let _persist_guard = self.persist_lock.lock();
         write_json(&self.path, &*self.recordings.read())
     }
 
@@ -51,6 +54,7 @@ impl LibraryStore {
     pub fn schedule_thumbnail_async(&self, id: String, file_path: String) {
         let recordings = Arc::clone(&self.recordings);
         let metadata_path = self.path.clone();
+        let persist_lock = Arc::clone(&self.persist_lock);
         let worker_id = id.clone();
         let worker_path = file_path.clone();
         let spawn_result = std::thread::Builder::new()
@@ -83,6 +87,7 @@ impl LibraryStore {
                 };
 
                 if changed {
+                    let _persist_guard = persist_lock.lock();
                     if let Err(error) = write_json(&metadata_path, &*recordings.read()) {
                         eprintln!(
                             "[Recorder][Health] thumbnail_persist_ok=false id={worker_id} error={error}"
@@ -120,6 +125,7 @@ impl LibraryStore {
 
         let recordings = Arc::clone(&self.recordings);
         let metadata_path = self.path.clone();
+        let persist_lock = Arc::clone(&self.persist_lock);
         let spawn_result = std::thread::Builder::new()
             .name("recorder-thumbnail-backfill".to_string())
             .spawn(move || {
@@ -140,6 +146,7 @@ impl LibraryStore {
                 }
 
                 if generated > 0 {
+                    let _persist_guard = persist_lock.lock();
                     if let Err(error) = write_json(&metadata_path, &*recordings.read()) {
                         eprintln!(
                             "[Recorder][Health] thumbnail_backfill_ok=false generated={generated} error={error}"
