@@ -3,7 +3,10 @@
 //! Recordings and settings are stored as JSON under the user's roaming app-data
 //! directory. Media files themselves remain in the configured Recordings folder.
 
-use crate::recording::{types::*, RecordingEngine};
+use crate::{
+    encoding,
+    recording::{types::*, RecordingEngine},
+};
 use parking_lot::RwLock;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -13,7 +16,7 @@ use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct LibraryStore {
-    pub recordings: RwLock<Vec<RecordingOutput>>,
+    pub recordings: Arc<RwLock<Vec<RecordingOutput>>>,
     path: PathBuf,
 }
 
@@ -30,15 +33,126 @@ impl LibraryStore {
                 .unwrap_or(false)
         });
         let store = Self {
-            recordings: RwLock::new(recordings),
+            recordings: Arc::new(RwLock::new(recordings)),
             path,
         };
         let _ = store.persist();
+        store.refresh_thumbnails_async();
         store
     }
 
     pub fn persist(&self) -> Result<(), String> {
         write_json(&self.path, &*self.recordings.read())
+    }
+
+    /// Generate one newly completed recording's thumbnail without extending the
+    /// Stop transaction. The shared library entry and recordings.json are updated
+    /// after Windows returns the thumbnail.
+    pub fn schedule_thumbnail_async(&self, id: String, file_path: String) {
+        let recordings = Arc::clone(&self.recordings);
+        let metadata_path = self.path.clone();
+        let spawn_result = std::thread::Builder::new()
+            .name("recorder-thumbnail".to_string())
+            .spawn(move || {
+                let started = std::time::Instant::now();
+                let Some(thumbnail) =
+                    encoding::generate_thumbnail_data_url(Path::new(&file_path))
+                else {
+                    eprintln!(
+                        "[Recorder][Health] thumbnail_ok=false id={id} path={file_path}"
+                    );
+                    return;
+                };
+
+                let changed = {
+                    let mut guard = recordings.write();
+                    let Some(recording) = guard.iter_mut().find(|recording| recording.id == id)
+                    else {
+                        return;
+                    };
+                    if recording.thumbnail_data_url.is_some() {
+                        false
+                    } else {
+                        recording.thumbnail_data_url = Some(thumbnail);
+                        true
+                    }
+                };
+
+                if changed {
+                    if let Err(error) = write_json(&metadata_path, &*recordings.read()) {
+                        eprintln!(
+                            "[Recorder][Health] thumbnail_persist_ok=false id={id} error={error}"
+                        );
+                    } else {
+                        eprintln!(
+                            "[Recorder][Health] thumbnail_ok=true id={id} thumbnail_ms={}",
+                            started.elapsed().as_millis()
+                        );
+                    }
+                }
+            });
+
+        if let Err(error) = spawn_result {
+            eprintln!(
+                "[Recorder][Health] thumbnail_ok=false id={id} error=unable_to_spawn_thumbnail_worker:{error}"
+            );
+        }
+    }
+
+    /// Backfill thumbnails for recordings created before native thumbnail support.
+    /// One worker processes the pending list sequentially to avoid flooding the
+    /// Windows thumbnail cache with parallel requests during application startup.
+    pub fn refresh_thumbnails_async(&self) {
+        let pending: Vec<(String, String)> = self
+            .recordings
+            .read()
+            .iter()
+            .filter(|recording| recording.thumbnail_data_url.is_none())
+            .map(|recording| (recording.id.clone(), recording.file_path.clone()))
+            .collect();
+        if pending.is_empty() {
+            return;
+        }
+
+        let recordings = Arc::clone(&self.recordings);
+        let metadata_path = self.path.clone();
+        let spawn_result = std::thread::Builder::new()
+            .name("recorder-thumbnail-backfill".to_string())
+            .spawn(move || {
+                let mut generated = 0usize;
+                for (id, file_path) in pending {
+                    let Some(thumbnail) =
+                        encoding::generate_thumbnail_data_url(Path::new(&file_path))
+                    else {
+                        continue;
+                    };
+                    let mut guard = recordings.write();
+                    if let Some(recording) = guard.iter_mut().find(|recording| recording.id == id) {
+                        if recording.thumbnail_data_url.is_none() {
+                            recording.thumbnail_data_url = Some(thumbnail);
+                            generated += 1;
+                        }
+                    }
+                }
+
+                if generated > 0 {
+                    if let Err(error) = write_json(&metadata_path, &*recordings.read()) {
+                        eprintln!(
+                            "[Recorder][Health] thumbnail_backfill_ok=false generated={generated} error={error}"
+                        );
+                    } else {
+                        eprintln!(
+                            "[Recorder][Health] thumbnail_backfill_ok=true generated={generated}"
+                        );
+                    }
+                }
+            });
+
+        if let Err(error) = spawn_result {
+            eprintln!(
+                "[Recorder][Health] thumbnail_backfill_ok=false error=unable_to_spawn_thumbnail_backfill:{error}"
+            );
+        }
     }
 }
 
