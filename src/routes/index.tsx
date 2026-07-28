@@ -1,12 +1,11 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
-import { Circle, Sparkles } from "lucide-react";
+import { Circle, Loader2, Sparkles } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { SourceSelector } from "@/components/recorder/SourceSelector";
 import { MicSelector } from "@/components/recorder/MicSelector";
 import { CameraSelector } from "@/components/recorder/CameraSelector";
 import { SystemAudioToggle } from "@/components/recorder/SystemAudioToggle";
-import { Countdown } from "@/components/recorder/Countdown";
 import { FloatingControls } from "@/components/recorder/FloatingControls";
 import { Button } from "@/components/ui/button";
 import { useRecorder } from "@/hooks/useRecorder";
@@ -49,6 +48,7 @@ function RecorderPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const starting = recorder.status === "preparing";
   const canRecord = !!target && recorder.status === "idle";
 
   const handleStart = async () => {
@@ -67,7 +67,12 @@ function RecorderPage() {
     if (out) navigate({ to: "/recording/$id", params: { id: out.id } });
   };
 
-  const showFloating = recorder.status === "recording" || recorder.status === "paused" || recorder.status === "stopping";
+  const showFloating =
+    recorder.status === "recording" ||
+    recorder.status === "pausing" ||
+    recorder.status === "paused" ||
+    recorder.status === "resuming" ||
+    recorder.status === "stopping";
   const setupPreviewActive = recorder.status === "idle";
 
   return (
@@ -122,18 +127,21 @@ function RecorderPage() {
           size="lg"
           disabled={!canRecord}
           onClick={handleStart}
-          className="group h-14 gap-3 rounded-full bg-record px-8 text-record-foreground shadow-[var(--shadow-record)] hover:bg-record/90 disabled:opacity-40 disabled:shadow-none"
+          aria-busy={starting}
+          className="group h-14 gap-3 rounded-full bg-record px-8 text-record-foreground shadow-[var(--shadow-record)] hover:bg-record/90 disabled:opacity-60 disabled:shadow-none"
         >
-          <span className="flex size-4 items-center justify-center rounded-full border-2 border-current">
-            <Circle className="size-2 fill-current" />
-          </span>
-          <span className="text-base font-semibold">Start Recording</span>
+          {starting ? (
+            <Loader2 className="size-5 animate-spin" />
+          ) : (
+            <span className="flex size-4 items-center justify-center rounded-full border-2 border-current">
+              <Circle className="size-2 fill-current" />
+            </span>
+          )}
+          <span className="text-base font-semibold">{starting ? "Starting…" : "Start Recording"}</span>
         </Button>
         {!target && <p className="text-xs text-muted-foreground">Select a screen or window to enable recording.</p>}
         {recorder.error && <p className="text-xs text-destructive">Error: {recorder.error.message}</p>}
       </div>
-
-      {recorder.status === "countdown" && recorder.countdown !== null && <Countdown value={recorder.countdown} />}
 
       {showFloating && (
         <FloatingControls
