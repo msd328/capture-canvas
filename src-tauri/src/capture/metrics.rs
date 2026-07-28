@@ -4,14 +4,14 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Copy)]
 pub enum CaptureBackend {
     NativeGpu,
-    FfmpegFallback,
+    NativeBuffer,
 }
 
 impl CaptureBackend {
     const fn label(self) -> &'static str {
         match self {
             Self::NativeGpu => "native-wgc-d3d11",
-            Self::FfmpegFallback => "wgc-ffmpeg-fallback",
+            Self::NativeBuffer => "native-wgc-buffer",
         }
     }
 }
