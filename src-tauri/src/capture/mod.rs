@@ -11,29 +11,46 @@ use crate::recording::types::{CaptureKind, CaptureTarget, DisplayInfo, WindowInf
 use anyhow::Result;
 
 #[cfg(windows)]
+mod metrics;
+#[cfg(windows)]
 mod wgc;
 #[cfg(windows)]
 mod wgc_gpu;
 
 #[cfg(windows)]
 pub enum NativeVideoCapture {
-    Gpu(wgc_gpu::NativeGpuVideoCapture),
-    Ffmpeg(wgc::NativeVideoCapture),
+    Gpu {
+        capture: wgc_gpu::NativeGpuVideoCapture,
+        metrics: metrics::CaptureSessionMetrics,
+    },
+    Ffmpeg {
+        capture: wgc::NativeVideoCapture,
+        metrics: metrics::CaptureSessionMetrics,
+    },
 }
 
 #[cfg(windows)]
 impl NativeVideoCapture {
     pub fn captures_system_audio(&self) -> bool {
         match self {
-            Self::Gpu(capture) => capture.captures_system_audio(),
-            Self::Ffmpeg(_) => false,
+            Self::Gpu { capture, .. } => capture.captures_system_audio(),
+            Self::Ffmpeg { .. } => false,
         }
     }
 
     pub fn stop(self) -> Result<()> {
+        let stop_started = std::time::Instant::now();
         match self {
-            Self::Gpu(capture) => capture.stop(),
-            Self::Ffmpeg(capture) => capture.stop(),
+            Self::Gpu { capture, metrics } => {
+                let result = capture.stop();
+                metrics.log_stopped(stop_started.elapsed(), result.is_ok());
+                result
+            }
+            Self::Ffmpeg { capture, metrics } => {
+                let result = capture.stop();
+                metrics.log_stopped(stop_started.elapsed(), result.is_ok());
+                result
+            }
         }
     }
 }
@@ -46,11 +63,26 @@ pub fn start_native_video_capture(
     height: u32,
     output_path: &std::path::Path,
 ) -> Result<NativeVideoCapture> {
+    let camera = config.camera_id.is_some();
+    let microphone = config.microphone_id.is_some();
+    let system_audio = config.system_audio;
+    let fps = config.fps.clamp(1, 60);
+
+    let native_started = std::time::Instant::now();
     match wgc_gpu::start_native_gpu_video_capture(config, target, width, height, output_path) {
         Ok(capture) => {
-            let camera = config.camera_id.is_some();
-            let microphone = config.microphone_id.is_some();
-            let system_audio = config.system_audio;
+            let metrics = metrics::CaptureSessionMetrics::new(
+                metrics::CaptureBackend::NativeGpu,
+                output_path,
+                native_started.elapsed(),
+                width,
+                height,
+                fps,
+                camera,
+                microphone,
+                system_audio,
+            );
+            metrics.log_started();
 
             if camera && microphone && system_audio {
                 eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera + mixed microphone/system-audio active");
@@ -69,9 +101,13 @@ pub fn start_native_video_capture(
             } else {
                 eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 encoder active");
             }
-            return Ok(NativeVideoCapture::Gpu(capture));
+            return Ok(NativeVideoCapture::Gpu { capture, metrics });
         }
         Err(native_error) => {
+            eprintln!(
+                "[Recorder][Health] native_init_failed_ms={} error={native_error}",
+                native_started.elapsed().as_millis(),
+            );
             eprintln!(
                 "[Recorder] Native Windows encoder unavailable ({native_error}); falling back to FFmpeg"
             );
@@ -81,8 +117,21 @@ pub fn start_native_video_capture(
         }
     }
 
-    wgc::start_native_video_capture(config, target, width, height, output_path)
-        .map(NativeVideoCapture::Ffmpeg)
+    let fallback_started = std::time::Instant::now();
+    let capture = wgc::start_native_video_capture(config, target, width, height, output_path)?;
+    let metrics = metrics::CaptureSessionMetrics::new(
+        metrics::CaptureBackend::FfmpegFallback,
+        output_path,
+        fallback_started.elapsed(),
+        width,
+        height,
+        fps,
+        camera,
+        microphone,
+        system_audio,
+    );
+    metrics.log_started();
+    Ok(NativeVideoCapture::Ffmpeg { capture, metrics })
 }
 
 #[derive(Debug, Clone)]
