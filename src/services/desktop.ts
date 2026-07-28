@@ -1,5 +1,7 @@
 import type {
   CameraInfo,
+  CapturePreview,
+  CaptureTarget,
   DisplayInfo,
   MicrophoneInfo,
   RecorderSettings,
@@ -49,6 +51,8 @@ export const listWindows = () => call<WindowInfo[]>("list_windows", undefined, (
 export const listMicrophones = () => call<MicrophoneInfo[]>("list_microphones", undefined, () => mock.listMicrophones());
 export const listCameras = () => call<CameraInfo[]>("list_cameras", undefined, () => mock.listCameras());
 export const getSystemAudioSupported = () => call<boolean>("system_audio_supported", undefined, async () => false);
+export const captureSourcePreview = (target: CaptureTarget) =>
+  call<CapturePreview>("capture_source_preview", { target }, () => mock.captureSourcePreview(target));
 
 export const startRecording = (config: RecordingConfig) =>
   call<{ id: string }>("start_recording", { config }, () => mock.startRecording(config));
