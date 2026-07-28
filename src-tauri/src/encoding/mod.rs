@@ -194,9 +194,82 @@ pub fn ensure_ffmpeg_available() -> Result<()> {
     }
 }
 
-/// Thumbnail extraction is deliberately not part of the Stop transaction.
-/// Returning the completed MP4 to the UI takes priority; a later library worker
-/// can generate thumbnails without holding the recorder on `Saving…`.
+/// Stop must never wait for thumbnail extraction. The recording engine calls this
+/// placeholder while constructing its immediate response; the library worker below
+/// performs the real Windows thumbnail extraction after the MP4 has been returned.
 pub fn thumbnail_data_url(_video_path: &Path) -> Option<String> {
     None
+}
+
+/// Extract a cached Windows video thumbnail and return it as a browser-ready data URL.
+/// This function is intentionally blocking and must only be called from a background
+/// library worker, never from Start/Pause/Resume/Stop command handling.
+pub fn generate_thumbnail_data_url(video_path: &Path) -> Option<String> {
+    #[cfg(windows)]
+    {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine as _;
+        use windows::core::HSTRING;
+        use windows::Storage::FileProperties::{ThumbnailMode, ThumbnailOptions};
+        use windows::Storage::Streams::{Buffer, DataReader, InputStreamOptions};
+        use windows::Storage::StorageFile;
+
+        const REQUESTED_EDGE: u32 = 480;
+        const MAX_THUMBNAIL_BYTES: u64 = 16 * 1024 * 1024;
+
+        let absolute = std::fs::canonicalize(video_path).ok()?;
+        let path = HSTRING::from(absolute.to_string_lossy().as_ref());
+        let file = StorageFile::GetFileFromPathAsync(&path).ok()?.get().ok()?;
+        let thumbnail = file
+            .GetThumbnailAsync(
+                ThumbnailMode::VideosView,
+                REQUESTED_EDGE,
+                ThumbnailOptions::UseCurrentScale,
+            )
+            .ok()?
+            .get()
+            .ok()?;
+
+        let size = thumbnail.Size().ok()?;
+        if size == 0 || size > MAX_THUMBNAIL_BYTES || size > u64::from(u32::MAX) {
+            let _ = thumbnail.Close();
+            return None;
+        }
+
+        let buffer = Buffer::Create(size as u32).ok()?;
+        let filled = thumbnail
+            .ReadAsync(&buffer, size as u32, InputStreamOptions::None)
+            .ok()?
+            .get()
+            .ok()?;
+        let length = filled.Length().ok()? as usize;
+        if length == 0 {
+            let _ = thumbnail.Close();
+            return None;
+        }
+
+        let reader = DataReader::FromBuffer(&filled).ok()?;
+        let mut bytes = vec![0u8; length];
+        reader.ReadBytes(&mut bytes).ok()?;
+
+        let content_type = thumbnail
+            .ContentType()
+            .ok()
+            .map(|value| value.to_string())
+            .filter(|value| value.starts_with("image/"))
+            .unwrap_or_else(|| "image/jpeg".to_string());
+
+        let _ = reader.Close();
+        let _ = thumbnail.Close();
+        return Some(format!(
+            "data:{content_type};base64,{}",
+            STANDARD.encode(bytes)
+        ));
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = video_path;
+        None
+    }
 }
