@@ -72,12 +72,20 @@ impl GraphicsCaptureApiHandler for FramePipe {
     ) -> Result<(), Self::Error> {
         let frame_width = frame.width();
         let frame_height = frame.height();
+        let output_width = self.width;
+        let output_height = self.height;
+        let crop_region = self.crop_region;
         let buffer = frame
             .buffer()
             .map_err(|error| format!("Unable to map WGC frame: {error}"))?;
 
-        self.scratch.clear();
-        let bytes = buffer.as_nopadding_buffer(&mut self.scratch);
+        // Keep the source scratch buffer and destination frame as explicit,
+        // disjoint field borrows. `bytes` borrows `scratch`, so calling a method
+        // that takes `&mut self` here would overlap that borrow and fail E0499.
+        let scratch = &mut self.scratch;
+        let next_frame = &mut self.next_frame;
+        scratch.clear();
+        let bytes = buffer.as_nopadding_buffer(scratch);
         let source_expected = frame_width as usize * frame_height as usize * 4;
         if bytes.len() != source_expected {
             return Err(format!(
@@ -86,17 +94,32 @@ impl GraphicsCaptureApiHandler for FramePipe {
             ));
         }
 
-        self.next_frame.clear();
-        if let Some(crop) = self.crop_region {
-            self.copy_crop(bytes, frame_width, frame_height, crop)?;
-        } else if frame_width == self.width && frame_height == self.height {
-            self.next_frame.extend_from_slice(bytes);
+        next_frame.clear();
+        if let Some(crop) = crop_region {
+            copy_crop(
+                next_frame,
+                bytes,
+                frame_width,
+                frame_height,
+                output_width,
+                output_height,
+                crop,
+            )?;
+        } else if frame_width == output_width && frame_height == output_height {
+            next_frame.extend_from_slice(bytes);
         } else {
-            self.copy_normalized(bytes, frame_width, frame_height);
+            copy_normalized(
+                next_frame,
+                bytes,
+                frame_width,
+                frame_height,
+                output_width,
+                output_height,
+            );
         }
 
         let mut slot = self.slot.lock();
-        std::mem::swap(&mut slot.frame, &mut self.next_frame);
+        std::mem::swap(&mut slot.frame, next_frame);
         slot.generation = slot.generation.wrapping_add(1);
         Ok(())
     }
@@ -106,66 +129,71 @@ impl GraphicsCaptureApiHandler for FramePipe {
     }
 }
 
-impl FramePipe {
-    fn copy_crop(
-        &mut self,
-        bytes: &[u8],
-        frame_width: u32,
-        frame_height: u32,
-        crop: CropRegion,
-    ) -> Result<(), String> {
-        let right = crop
-            .x
-            .checked_add(crop.width)
-            .ok_or_else(|| "Selected crop rectangle overflowed horizontally".to_string())?;
-        let bottom = crop
-            .y
-            .checked_add(crop.height)
-            .ok_or_else(|| "Selected crop rectangle overflowed vertically".to_string())?;
-        if right > frame_width || bottom > frame_height {
-            return Err(format!(
-                "The selected crop area is outside the current source frame (crop {}x{} at {},{}; source {}x{})",
-                crop.width, crop.height, crop.x, crop.y, frame_width, frame_height
-            ));
-        }
-        if crop.width != self.width || crop.height != self.height {
-            return Err(format!(
-                "Crop output size changed unexpectedly ({}x{} -> {}x{})",
-                crop.width, crop.height, self.width, self.height
-            ));
-        }
-
-        self.next_frame
-            .resize(self.width as usize * self.height as usize * 4, 0);
-        let row_bytes = self.width as usize * 4;
-        for row in 0..self.height as usize {
-            let src_start =
-                (((crop.y as usize + row) * frame_width as usize) + crop.x as usize) * 4;
-            let dst_start = row * row_bytes;
-            self.next_frame[dst_start..dst_start + row_bytes]
-                .copy_from_slice(&bytes[src_start..src_start + row_bytes]);
-        }
-        Ok(())
+fn copy_crop(
+    next_frame: &mut Vec<u8>,
+    bytes: &[u8],
+    frame_width: u32,
+    frame_height: u32,
+    output_width: u32,
+    output_height: u32,
+    crop: CropRegion,
+) -> Result<(), String> {
+    let right = crop
+        .x
+        .checked_add(crop.width)
+        .ok_or_else(|| "Selected crop rectangle overflowed horizontally".to_string())?;
+    let bottom = crop
+        .y
+        .checked_add(crop.height)
+        .ok_or_else(|| "Selected crop rectangle overflowed vertically".to_string())?;
+    if right > frame_width || bottom > frame_height {
+        return Err(format!(
+            "The selected crop area is outside the current source frame (crop {}x{} at {},{}; source {}x{})",
+            crop.width, crop.height, crop.x, crop.y, frame_width, frame_height
+        ));
+    }
+    if crop.width != output_width || crop.height != output_height {
+        return Err(format!(
+            "Crop output size changed unexpectedly ({}x{} -> {}x{})",
+            crop.width, crop.height, output_width, output_height
+        ));
     }
 
-    fn copy_normalized(&mut self, bytes: &[u8], frame_width: u32, frame_height: u32) {
-        self.next_frame
-            .resize(self.width as usize * self.height as usize * 4, 0);
+    next_frame.resize(output_width as usize * output_height as usize * 4, 0);
+    let row_bytes = output_width as usize * 4;
+    for row in 0..output_height as usize {
+        let src_start =
+            (((crop.y as usize + row) * frame_width as usize) + crop.x as usize) * 4;
+        let dst_start = row * row_bytes;
+        next_frame[dst_start..dst_start + row_bytes]
+            .copy_from_slice(&bytes[src_start..src_start + row_bytes]);
+    }
+    Ok(())
+}
 
-        let copy_width = frame_width.min(self.width) as usize;
-        let copy_height = frame_height.min(self.height) as usize;
-        let src_x = ((frame_width as usize).saturating_sub(copy_width)) / 2;
-        let src_y = ((frame_height as usize).saturating_sub(copy_height)) / 2;
-        let dst_x = ((self.width as usize).saturating_sub(copy_width)) / 2;
-        let dst_y = ((self.height as usize).saturating_sub(copy_height)) / 2;
-        let row_bytes = copy_width * 4;
+fn copy_normalized(
+    next_frame: &mut Vec<u8>,
+    bytes: &[u8],
+    frame_width: u32,
+    frame_height: u32,
+    output_width: u32,
+    output_height: u32,
+) {
+    next_frame.resize(output_width as usize * output_height as usize * 4, 0);
 
-        for row in 0..copy_height {
-            let src_start = ((src_y + row) * frame_width as usize + src_x) * 4;
-            let dst_start = ((dst_y + row) * self.width as usize + dst_x) * 4;
-            self.next_frame[dst_start..dst_start + row_bytes]
-                .copy_from_slice(&bytes[src_start..src_start + row_bytes]);
-        }
+    let copy_width = frame_width.min(output_width) as usize;
+    let copy_height = frame_height.min(output_height) as usize;
+    let src_x = ((frame_width as usize).saturating_sub(copy_width)) / 2;
+    let src_y = ((frame_height as usize).saturating_sub(copy_height)) / 2;
+    let dst_x = ((output_width as usize).saturating_sub(copy_width)) / 2;
+    let dst_y = ((output_height as usize).saturating_sub(copy_height)) / 2;
+    let row_bytes = copy_width * 4;
+
+    for row in 0..copy_height {
+        let src_start = ((src_y + row) * frame_width as usize + src_x) * 4;
+        let dst_start = ((dst_y + row) * output_width as usize + dst_x) * 4;
+        next_frame[dst_start..dst_start + row_bytes]
+            .copy_from_slice(&bytes[src_start..src_start + row_bytes]);
     }
 }
 
