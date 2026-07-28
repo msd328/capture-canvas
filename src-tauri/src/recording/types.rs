@@ -59,6 +59,23 @@ pub struct CaptureTarget {
     pub id: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CropRegion {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CapturePreview {
+    pub data_url: String,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordingConfig {
@@ -67,6 +84,8 @@ pub struct RecordingConfig {
     pub camera_id: Option<String>,
     pub system_audio: bool,
     pub fps: u32,
+    #[serde(default)]
+    pub crop_region: Option<CropRegion>,
     #[serde(default)]
     pub output_path: Option<String>,
     #[serde(default)]
