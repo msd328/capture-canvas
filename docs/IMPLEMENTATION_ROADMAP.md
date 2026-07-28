@@ -19,8 +19,8 @@ must provide the validation evidence.
 
 ## Current focus
 
-1. Validate the instrumented `windows_capture` facade on Windows.
-2. Complete frame-delivery, FPS-limiter, camera, and audio-mixer counters.
+1. Validate the instrumented `windows_capture` facade and timeline coverage diagnostics on Windows.
+2. Complete WGC frame-delivery/FPS-limiter, camera, and audio-mixer counters.
 3. Verify and fix static-screen duration continuity.
 4. Reduce warm Start, Pause, Resume, and Stop latency.
 5. Remove the remaining FFmpeg compatibility paths.
@@ -57,7 +57,7 @@ must provide the validation evidence.
 | VID-07 | 🟡 | Background H.264/AAC encoder warm-up | Compare first Start latency before/after warm-up |
 | VID-08 | 🟡 | Encoder submission counters | Instrumented facade compile/runtime pending |
 | VID-09 | 🔵 | WGC received/skipped/encoded counters | Log received, rate-limited, encoded, failed counts |
-| VID-10 | 🔵 | Static-screen duration continuity | 60 seconds static produces approximately 60 seconds output |
+| VID-10 | 🔵 | Static-screen duration continuity | 60 seconds static produces approximately 60 seconds output; timeline deficit diagnostics are now available |
 | VID-11 | 🔵 | Pure D3D11 selected-area crop | No CPU BGRA crop copy |
 | VID-12 | ⚪ | Hardware encoder capability reporting | Show selected hardware/software encoder path |
 | VID-13 | ⚪ | Smaller/balanced/high-quality presets | Quality and bitrate presets validated |
@@ -139,6 +139,7 @@ must provide the validation evidence.
 | HLT-13 | 🔵 | Audio/video drift | Millisecond drift report |
 | HLT-14 | ⚪ | Exportable diagnostic report | Copy/save support bundle |
 | HLT-15 | ⚪ | User-friendly health summary | Non-technical UI status |
+| HLT-16 | 🟡 | Expected-frame timeline coverage and deficit | Windows compile/runtime pending; log `expected_frames`, `frame_deficit`, and `timeline_coverage_pct` |
 
 ## Recording library
 
@@ -278,3 +279,5 @@ The desktop recorder is not production-ready until all of the following pass:
 | Date | Commit | Roadmap update |
 |---|---|---|
 | 2026-07-28 | `c688bc7` baseline | Added formal tracking after encoder submission instrumentation |
+| 2026-07-28 | `02f950e` | Added repository roadmap and validation policy |
+| 2026-07-28 | `d0b4708` | Added expected-frame timeline coverage and deficit diagnostics; HLT-16 → 🟡 |
