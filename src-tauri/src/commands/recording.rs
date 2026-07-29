@@ -13,9 +13,9 @@ fn worker_error(operation: &str, error: impl std::fmt::Display) -> String {
     format!("Recorder {operation} worker failed: {error}")
 }
 
-fn log_control_failure(operation: &str, stage: &str, started: Instant, error: &str) {
+fn log_control_failure(operation: &str, stage: &str, started: Instant) {
     eprintln!(
-        "[Recorder][ControlHealth] operation={operation} ok=false stage={stage} total_ms={} error={error}",
+        "[Recorder][ControlHealth] operation={operation} ok=false stage={stage} total_ms={}",
         started.elapsed().as_millis(),
     );
 }
@@ -29,14 +29,14 @@ pub async fn start_recording(
     let validation_started = Instant::now();
 
     if let Err(error) = security::validate_start_config(&config) {
-        log_control_failure("start", "validation", command_started, &error);
+        log_control_failure("start", "validation", command_started);
         return Err(error);
     }
     if let Some(title) = config.title.take() {
         match security::validate_title(&title) {
             Ok(title) => config.title = Some(title),
             Err(error) => {
-                log_control_failure("start", "title_validation", command_started, &error);
+                log_control_failure("start", "title_validation", command_started);
                 return Err(error);
             }
         }
@@ -51,7 +51,7 @@ pub async fn start_recording(
         Ok(result) => result,
         Err(error) => {
             let error = worker_error("start", error);
-            log_control_failure("start", "worker_join", command_started, &error);
+            log_control_failure("start", "worker_join", command_started);
             return Err(error);
         }
     };
@@ -65,9 +65,8 @@ pub async fn start_recording(
             Ok(StartResponse { id })
         }
         Err(error) => {
-            let error = error.to_string();
-            log_control_failure("start", "engine", command_started, &error);
-            Err(error)
+            log_control_failure("start", "engine", command_started);
+            Err(error.to_string())
         }
     }
 }
@@ -83,7 +82,7 @@ pub async fn pause_recording(state: State<'_, AppState>) -> Result<(), String> {
         Ok(result) => result,
         Err(error) => {
             let error = worker_error("pause", error);
-            log_control_failure("pause", "worker_join", command_started, &error);
+            log_control_failure("pause", "worker_join", command_started);
             return Err(error);
         }
     };
@@ -97,9 +96,8 @@ pub async fn pause_recording(state: State<'_, AppState>) -> Result<(), String> {
             Ok(())
         }
         Err(error) => {
-            let error = error.to_string();
-            log_control_failure("pause", "engine", command_started, &error);
-            Err(error)
+            log_control_failure("pause", "engine", command_started);
+            Err(error.to_string())
         }
     }
 }
@@ -115,7 +113,7 @@ pub async fn resume_recording(state: State<'_, AppState>) -> Result<(), String> 
         Ok(result) => result,
         Err(error) => {
             let error = worker_error("resume", error);
-            log_control_failure("resume", "worker_join", command_started, &error);
+            log_control_failure("resume", "worker_join", command_started);
             return Err(error);
         }
     };
@@ -129,9 +127,8 @@ pub async fn resume_recording(state: State<'_, AppState>) -> Result<(), String> 
             Ok(())
         }
         Err(error) => {
-            let error = error.to_string();
-            log_control_failure("resume", "engine", command_started, &error);
-            Err(error)
+            log_control_failure("resume", "engine", command_started);
+            Err(error.to_string())
         }
     }
 }
@@ -146,20 +143,19 @@ pub async fn stop_recording(state: State<'_, AppState>) -> Result<RecordingOutpu
     let output = match worker_result {
         Ok(Ok(output)) => output,
         Ok(Err(error)) => {
-            let error = error.to_string();
-            log_control_failure("stop", "engine", command_started, &error);
-            return Err(error);
+            log_control_failure("stop", "engine", command_started);
+            return Err(error.to_string());
         }
         Err(error) => {
             let error = worker_error("stop", error);
-            log_control_failure("stop", "worker_join", command_started, &error);
+            log_control_failure("stop", "worker_join", command_started);
             return Err(error);
         }
     };
 
     let validation_started = Instant::now();
     if let Err(error) = security::validate_existing_recording_path(&output.id, &output.file_path) {
-        log_control_failure("stop", "path_validation", command_started, &error);
+        log_control_failure("stop", "path_validation", command_started);
         return Err(error);
     }
     let path_validation_ms = validation_started.elapsed().as_millis();
@@ -170,7 +166,7 @@ pub async fn stop_recording(state: State<'_, AppState>) -> Result<RecordingOutpu
 
     let persist_started = Instant::now();
     if let Err(error) = state.library.persist() {
-        log_control_failure("stop", "library_persist", command_started, &error);
+        log_control_failure("stop", "library_persist", command_started);
         return Err(error);
     }
     let library_persist_ms = persist_started.elapsed().as_millis();
