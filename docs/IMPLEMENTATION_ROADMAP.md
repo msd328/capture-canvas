@@ -22,11 +22,11 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Revalidate the local external `windows_capture` facade after the E0753 module-documentation fix.
-2. Implement the critical Tauri security baseline: CSP, minimal capabilities, and restricted asset access.
-3. Canonicalise and allowlist recording paths for create/delete/open/thumbnail operations.
+1. Rebuild the recorder after the E0753 facade fix and the first security-hardening batch.
+2. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
+3. Run negative tests against tampered recording metadata, invalid UUIDs, custom output paths, and out-of-root files.
 4. Validate timeline coverage and WGC delivery diagnostics on Windows.
-5. Complete camera and audio-mixer counters.
+5. Complete remaining Rust command validation, camera counters, and audio-mixer counters.
 6. Verify and fix static-screen duration continuity.
 7. Reduce warm Start, Pause, Resume, and Stop latency.
 8. Remove the remaining FFmpeg compatibility paths.
@@ -238,13 +238,13 @@ The detailed policy, trust boundaries, current data inventory, and mandatory sta
 | ID | Status | Work | Acceptance evidence |
 |---|---:|---|---|
 | SEC-01 | 🟡 | Threat model, data inventory, trust boundaries, and security review policy | Baseline document committed; architecture review and future data-flow updates pending |
-| SEC-02 | 🔵 | Strict production Content Security Policy | Packaged UI works; unapproved script/connect/media origins are blocked |
-| SEC-03 | 🔵 | Replace wildcard asset-protocol scope with recording-only access | Arbitrary local files cannot be loaded through the webview |
-| SEC-04 | 🔵 | Canonical recording-path allowlist for create/delete/open/thumbnail/upload | Traversal, tampered metadata, links/reparse targets, and outside-root paths are rejected |
-| SEC-05 | 🔵 | Minimal Tauri capabilities and plugin set | Every window has only documented permissions; unused plugins removed |
-| SEC-06 | 🔵 | Comprehensive Rust command-input validation and limits | Negative tests cover IDs, titles, FPS, dimensions, crops, paths, and collection sizes |
+| SEC-02 | 🟡 | Strict production Content Security Policy | Production/dev CSP and security headers configured; Windows dev and packaged UI validation pending |
+| SEC-03 | 🟡 | Replace wildcard asset-protocol scope with recording-only access | Scope limited to `$HOME/Recordings/*.mp4`; playback and arbitrary-file rejection tests pending |
+| SEC-04 | 🟡 | Canonical recording-path allowlist for create/delete/open/thumbnail/upload | UUID/filename/root/regular-file checks implemented for current local operations; negative and filesystem-race tests pending |
+| SEC-05 | 🟡 | Minimal Tauri capabilities and plugin set | Main-window core-only capability added and fs/shell/dialog/opener runtime/dependencies removed; schema/runtime validation pending |
+| SEC-06 | 🟡 | Comprehensive Rust command-input validation and limits | UUID, title, FPS, device ID, output-path and settings validation added; dimensions/crops/source IDs/negative test suite remain |
 | SEC-07 | 🔵 | Remove or authenticate external executable discovery | Production never executes an unverified PATH/environment-selected FFmpeg binary |
-| SEC-08 | 🔵 | Diagnostic-log privacy and redaction | Exportable logs contain no tokens, captured content, usernames, or full local paths |
+| SEC-08 | 🔵 | Diagnostic-log privacy and redaction | Thumbnail path logs reduced; complete capture-health path redaction still required |
 | SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot configuration committed; first successful update/alert cycle pending |
 | SEC-10 | 🔵 | Secret scanning and repository protection | Secret scanning enabled; test secret is blocked or detected without entering history |
 | SEC-11 | ⚪ | Signed executable, installer, updater, and update metadata | Signature verification passes on a clean machine |
@@ -316,4 +316,7 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-28 | `e949aba..b52ae4a` | Added central WGC delivery, FPS-limiter, capture-gap and processing-deficit counters; VID-09 and HLT-09/10 → 🟡 |
 | 2026-07-28 | `885ba57..7f051ed` | Fixed E0597 callback guard lifetime through the Rust 2024 facade entry wrapper; validation remained pending |
 | 2026-07-29 | `942e99c` | Replaced `include!` with a normal module path after E0753 inner-documentation errors; facade validation remains pending |
-| 2026-07-29 | `41cddbf..7f93bbc` | Added the security baseline and weekly npm/Cargo dependency monitoring; SEC-01 and SEC-09 → 🟡, SEC-02–08/10 → 🔵 |
+| 2026-07-29 | `41cddbf..7f93bbc` | Added the security baseline and weekly npm/Cargo dependency monitoring; SEC-01 and SEC-09 → 🟡 |
+| 2026-07-29 | `a96773e..16a6595` | Added canonical UUID/file/root guards, command validation, settings normalisation, startup metadata filtering, and protected thumbnail/open/delete paths; SEC-04/06 → 🟡 |
+| 2026-07-29 | `86c3a8b..15093a5` | Added main-window capability, removed unused Tauri plugins, enabled strict CSP, and restricted the asset protocol; SEC-02/03/05 → 🟡 |
+| 2026-07-29 | `eaa5edc` | Updated the security baseline with implemented controls, validation requirements, and remaining risks |
