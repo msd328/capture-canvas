@@ -3,6 +3,8 @@
 // module documentation, while the crate's Rust 2024 edition retains the
 // callback-guard temporary lifetime fix.
 pub mod diagnostics;
+#[path = "mixer_diagnostics.rs"]
+pub mod mixer_diagnostics;
 
 #[allow(unused_imports)]
 #[path = "lib.rs"]
