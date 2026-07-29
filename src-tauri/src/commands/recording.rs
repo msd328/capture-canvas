@@ -49,13 +49,12 @@ pub async fn resume_recording(state: State<'_, AppState>) -> Result<(), String> 
 #[tauri::command]
 pub async fn stop_recording(state: State<'_, AppState>) -> Result<RecordingOutput, String> {
     let engine = state.engine.clone();
-    let mut output = tauri::async_runtime::spawn_blocking(move || engine.stop())
+    let output = tauri::async_runtime::spawn_blocking(move || engine.stop())
         .await
         .map_err(|error| worker_error("stop", error))?
         .map_err(|error| error.to_string())?;
 
-    let canonical = security::validate_existing_recording_path(&output.id, &output.file_path)?;
-    output.file_path = canonical.to_string_lossy().into_owned();
+    security::validate_existing_recording_path(&output.id, &output.file_path)?;
     state.library.recordings.write().insert(0, output.clone());
     state.library.persist()?;
     state
