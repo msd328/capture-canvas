@@ -3,8 +3,30 @@
 //! Windows Graphics Capture can avoid producing new frames while a source remains
 //! unchanged. The underlying encoder timestamps samples from WGC, so stopping during
 //! a long unchanged tail can otherwise leave the MP4 shorter than wall-clock time.
-//! This layer retains one throttled BGRA snapshot and submits it once at the current
-//! wall-clock position immediately before encoder finalisation.
+//! This layer retains one throttled BGRA snapshot and submits it once at the user's
+//! Pause/Stop request position immediately before encoder finalisation.
+
+use std::sync::Mutex;
+use std::time::Instant;
+
+static STOP_REQUESTED_AT: Mutex<Option<Instant>> = Mutex::new(None);
+
+/// Records the user-visible Pause/Stop request time before native shutdown begins.
+pub fn mark_recording_stop_requested() {
+    if let Ok(mut slot) = STOP_REQUESTED_AT.lock() {
+        *slot = Some(Instant::now());
+    }
+}
+
+fn clear_recording_stop_request() {
+    if let Ok(mut slot) = STOP_REQUESTED_AT.lock() {
+        slot.take();
+    }
+}
+
+fn take_recording_stop_request() -> Option<Instant> {
+    STOP_REQUESTED_AT.lock().ok()?.take()
+}
 
 pub use windows_capture_base::{
     capture, d3d11, diagnostics, frame, graphics_capture_api, mixer_diagnostics, monitor, settings,
@@ -116,13 +138,11 @@ pub mod encoder {
                 return;
             };
 
-            let elapsed_hns = i64::try_from(
-                capture_ended_at
-                    .duration_since(first_wall)
-                    .as_nanos()
-                    .saturating_div(100),
-            )
-            .unwrap_or(i64::MAX);
+            let elapsed = capture_ended_at
+                .checked_duration_since(first_wall)
+                .unwrap_or_default();
+            let elapsed_hns =
+                i64::try_from(elapsed.as_nanos().saturating_div(100)).unwrap_or(i64::MAX);
             let target_timestamp = first_timestamp.saturating_add(elapsed_hns);
             let tail_gap_hns = target_timestamp.saturating_sub(last_timestamp).max(0);
             self.tail_gap_ms_before_hold =
@@ -154,7 +174,12 @@ pub mod encoder {
             }
             let active_wall_ms = self
                 .first_video_wall
-                .map(|first| capture_ended_at.duration_since(first).as_millis())
+                .map(|first| {
+                    capture_ended_at
+                        .checked_duration_since(first)
+                        .unwrap_or_default()
+                        .as_millis()
+                })
                 .unwrap_or(0);
             let video_span_ms = match (
                 self.first_video_timestamp_hns,
@@ -209,6 +234,7 @@ pub mod encoder {
             container_settings: ContainerSettingsBuilder,
             path: P,
         ) -> Result<Self, VideoEncoderError> {
+            crate::clear_recording_stop_request();
             let continuity = StaticContinuityHealth::new(path.as_ref());
             windows_capture_base::encoder::VideoEncoder::new(
                 video_settings,
@@ -259,7 +285,8 @@ pub mod encoder {
         }
 
         pub fn finish(self) -> Result<(), VideoEncoderError> {
-            let capture_ended_at = Instant::now();
+            let capture_ended_at =
+                crate::take_recording_stop_request().unwrap_or_else(Instant::now);
             let Self {
                 mut inner,
                 mut continuity,
