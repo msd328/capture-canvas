@@ -62,6 +62,21 @@ The current recorder has no application account token or API credential storage.
 - Sign production executables, installers, update bundles, and update metadata.
 - Review licences and vulnerabilities for direct and transitive dependencies.
 
+## Current implemented desktop controls
+
+The following controls were implemented on 2026-07-29 and remain validation-pending until the Windows build and negative tests pass:
+
+- Production CSP blocks unapproved script, connection, frame, form, object, image, and media origins.
+- Development CSP allows only the local Tauri IPC endpoints and the localhost Vite/HMR server.
+- Asset-protocol access is limited to direct `.mp4` children of `$HOME/Recordings` instead of a wildcard filesystem scope.
+- The `main` window has an explicit core-only capability and no filesystem, shell, dialog, or opener plugin permissions.
+- Unused filesystem, shell, dialog, and opener plugin initialisers and Cargo dependencies were removed.
+- Custom recording output paths supplied by the WebView are rejected.
+- Recording IDs must be canonical UUIDs and completed files must be named exactly `<UUID>.mp4`.
+- Existing recording paths are canonicalised and must resolve to a non-empty regular file directly under the approved Recordings root before open, delete, rename validation, thumbnail generation, startup loading, or library persistence.
+- FPS, device-ID length/content, title length/content, and output-directory settings receive Rust-side validation.
+- Background thumbnail error logs no longer include the full recording path.
+
 ## Required security impact block for every implementation batch
 
 Every status update and roadmap commit must include:
@@ -84,15 +99,15 @@ Use `None` explicitly rather than omitting a field.
 
 ## Current known risks
 
-- Tauri Content Security Policy is currently disabled.
-- The asset protocol scope currently uses a wildcard.
-- Recording output paths are not yet constrained to canonical approved roots.
-- Library delete/open/thumbnail operations trust persisted metadata paths more than they should.
+- The new CSP, security headers, and capability configuration have not yet been compile/runtime validated on Windows.
+- Restricted asset playback has not yet been verified against WebView2 and existing local recordings.
+- The canonical path checks narrow access to one app-approved root, but operating-system filesystem races between validation and use require further hardening for hostile same-user local processes.
+- The approved root is currently derived from the process home environment and should later use the operating system known-folder API.
 - Metadata and recordings are not encrypted at rest.
-- Filesystem, shell, opener, and dialog plugins require a least-privilege capability audit.
+- Full command validation is not complete for every dimension, crop, source identifier, and collection size.
 - FFmpeg compatibility discovery can use an environment override or PATH lookup.
-- Health logs can contain full local paths.
-- Dependency vulnerability scanning, secret scanning, signing, updater verification, and penetration testing are not yet complete.
+- Some capture health logs can still contain full local paths.
+- Dependency vulnerability alerts, secret scanning, signing, updater verification, and penetration testing are not yet complete.
 
 These risks are tracked by SEC IDs in the implementation roadmap and block public production release where applicable.
 
@@ -126,6 +141,52 @@ These risks are tracked by SEC IDs in the implementation roadmap and block publi
 - Encryption and key-management review.
 - Rate limiting, audit logs, alerting, backup/restore testing, and incident-response runbook.
 - Independent penetration test and remediation verification.
+
+## Batch security record — 2026-07-29 security hardening
+
+```text
+Security impact:
+Reduced WebView, local-file, plugin, and command-input attack surface.
+
+Data accessed:
+Local recording metadata, recording files under the approved Recordings directory,
+and recorder settings.
+
+Data written:
+Tauri security configuration, capability policy, validated settings, and filtered
+recording metadata.
+
+Network communication added:
+None. Development CSP permits only localhost Vite/HMR and Tauri IPC endpoints.
+
+New permissions/capabilities:
+Added a core-only capability for the main window. No plugin permission was added.
+
+External processes:
+No new process. Existing fixed explorer.exe launch remains for opening an approved
+recording location. Existing FFmpeg compatibility paths remain.
+
+Untrusted inputs:
+Tauri command arguments, persisted recordings.json/settings.json values, UUIDs,
+titles, device IDs, FPS values, and local filesystem paths.
+
+Validation added:
+Canonical UUID and filename binding, direct-child canonical path checks, regular-file
+and non-empty checks, custom-output rejection, title/device/FPS/settings limits, and
+validation before thumbnail/open/delete/startup-library operations.
+
+Secrets involved:
+None.
+
+Security tests completed:
+Static code/configuration review only. Windows compilation, CSP runtime, local video
+playback, and tampered-metadata negative tests remain pending.
+
+Remaining risks:
+Filesystem race hardening, OS known-folder resolution, encryption at rest, FFmpeg
+executable trust, complete log redaction, secret scanning, signing, and penetration
+testing remain open.
+```
 
 ## Vulnerability handling
 
