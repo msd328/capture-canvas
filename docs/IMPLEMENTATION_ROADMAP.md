@@ -25,10 +25,10 @@ Every implementation update must also include the security-impact block defined 
 1. Rebuild the recorder after the E0753 facade fix and the first security-hardening batch.
 2. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
 3. Run negative tests against tampered recording metadata, invalid UUIDs, custom output paths, and out-of-root files.
-4. Validate timeline coverage, WGC delivery, camera health, submitted A/V drift, audio-mixer health, and control-phase diagnostics on Windows.
-5. Inspect Start/Pause/Resume/Stop timing fields, then refine slow engine sub-phases where evidence shows a bottleneck.
-6. Verify and fix static-screen duration continuity.
-7. Reduce warm Start, Pause, Resume, and Stop latency.
+4. Validate timeline coverage, WGC delivery, camera health, submitted A/V drift, audio-mixer health, control-phase, and static-continuity diagnostics on Windows.
+5. Run the 60-second mostly-static full-source and selected-area duration matrix.
+6. Inspect Start/Pause/Resume/Stop timing fields, then refine slow engine sub-phases where evidence shows a bottleneck.
+7. Add bounded native finalisation timeouts and continue remaining command/security hardening.
 8. Remove the remaining FFmpeg compatibility paths.
 
 ---
@@ -63,7 +63,7 @@ Every implementation update must also include the security-impact block defined 
 | VID-07 | 🟡 | Background H.264/AAC encoder warm-up | Compare first Start latency before/after warm-up |
 | VID-08 | 🟡 | Encoder submission counters | E0753 from the include-based entry was replaced by a normal module path in `942e99c`; rebuild/runtime pending |
 | VID-09 | 🟡 | WGC received/skipped/encoded counters | Central facade counter implemented; validate `frames_received`, `frames_rate_limited`, submissions and failures |
-| VID-10 | 🔵 | Static-screen duration continuity | 60 seconds static produces approximately 60 seconds output; timeline deficit diagnostics are available |
+| VID-10 | 🟡 | Static-screen duration continuity | Final unchanged tail is held to the Pause/Stop request timestamp through one throttled BGRA snapshot; 60-second Windows duration/playback validation pending |
 | VID-11 | 🔵 | Pure D3D11 selected-area crop | No CPU BGRA crop copy |
 | VID-12 | ⚪ | Hardware encoder capability reporting | Show selected hardware/software encoder path |
 | VID-13 | ⚪ | Smaller/balanced/high-quality presets | Quality and bitrate presets validated |
@@ -147,6 +147,7 @@ Every implementation update must also include the security-impact block defined 
 | HLT-15 | ⚪ | User-friendly health summary | Non-technical UI status |
 | HLT-16 | 🟡 | Expected-frame timeline coverage and deficit | Facade rebuild/runtime pending after E0753 entry fix |
 | HLT-17 | 🟡 | Recorder control-phase timing and failure stage | `ControlHealth` lines implemented for Start/Pause/Resume/Stop; Windows compile and timing-field validation pending |
+| HLT-18 | 🟡 | Static-tail continuity and held-frame outcome | `ContinuityHealth` reports requested wall span, video span, tail gap, snapshot availability and held-frame submission result; Windows validation pending |
 
 ## Recording library
 
@@ -172,7 +173,7 @@ Every implementation update must also include the security-impact block defined 
 |---|---:|---|---|
 | REL-01 | 🔵 | 30-minute recording test | Playable, correct duration/A/V |
 | REL-02 | 🔵 | Two-hour recording test | Stable memory, correct duration/A/V |
-| REL-03 | 🔵 | Static-screen test | Correct duration with minimal changes |
+| REL-03 | 🟡 | Static-screen test | Final-tail hold implemented; full-source and selected-area 60-second mostly-static MP4s must remain within one second of requested duration and play correctly |
 | REL-04 | 🔵 | High-motion 60 FPS test | Stable frame pacing |
 | REL-05 | 🔵 | Multi-monitor/DPI matrix | Different scaling/resolutions |
 | REL-06 | 🔵 | Window resize handling | Defined resize behaviour |
@@ -325,3 +326,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-29 | `9a95245..9adc100` | Added submitted PCM/video timeline duration, startup-offset and audio-submission-gap diagnostics; AUD-10 and HLT-13 → 🟡 |
 | 2026-07-29 | `8a8990e..d8496d8` | Added per-source mixer underrun, queue-drop and peak-depth diagnostics for both Windows capture backends; AUD-08, AUD-09 and HLT-12 → 🟡 |
 | 2026-07-29 | `78e758f` | Added command/engine boundary timings and failure-stage diagnostics; CTRL-10, CTRL-11 and HLT-17 → 🟡 |
+| 2026-07-29 | `1b3026b..a7ffa55` | Added a final static-tail hold anchored to the user Pause/Stop request; VID-10, REL-03 and HLT-18 → 🟡 |
