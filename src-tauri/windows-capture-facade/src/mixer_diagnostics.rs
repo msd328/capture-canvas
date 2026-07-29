@@ -1,19 +1,41 @@
 //! Per-segment microphone/system mixer health counters.
 //!
 //! The recorder's two current Windows mixer backends intentionally keep their
-//! existing queue and scheduling code. This module provides a `VecDeque`-shaped
-//! queue that passively counts silence substitutions and bounded-queue evictions.
+//! existing queue and scheduling code. This module provides `VecDeque`-shaped
+//! queues that passively count silence substitutions and bounded-queue evictions.
 
 use parking_lot::Mutex;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
+use std::marker::PhantomData;
 use std::sync::Arc;
 use std::time::Instant;
+
+const MIX_CHUNK_FRAMES: usize = 480;
+const MAX_MIX_QUEUE_FRAMES: usize = 96_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MixerSource {
     Microphone,
     System,
+}
+
+trait MixerBackend {
+    const ID: u8;
+    const LABEL: &'static str;
+}
+
+pub enum GpuMixerBackend {}
+pub enum BufferMixerBackend {}
+
+impl MixerBackend for GpuMixerBackend {
+    const ID: u8 = 1;
+    const LABEL: &'static str = "native-wgc-d3d11";
+}
+
+impl MixerBackend for BufferMixerBackend {
+    const ID: u8 = 2;
+    const LABEL: &'static str = "native-wgc-buffer";
 }
 
 struct MixerHealthState {
@@ -100,45 +122,43 @@ impl Drop for MixerHealthSession {
 }
 
 struct PendingMixerSession {
+    backend_id: u8,
     health: Arc<MixerHealthSession>,
-    next_source: u8,
-    chunk_frames: usize,
-    max_frames: usize,
 }
 
 thread_local! {
     static PENDING_MIXER_SESSION: RefCell<Option<PendingMixerSession>> = const { RefCell::new(None) };
 }
 
-/// Prepare the next two queue constructions as microphone and system queues for
-/// one mixer segment. The current recorder creates those queues consecutively on
-/// the same thread, before any fallible stream setup.
-pub fn start_audio_mixer_segment(
-    backend: &'static str,
-    chunk_frames: usize,
-    max_frames: usize,
-) {
-    let health = Arc::new(MixerHealthSession {
-        state: Mutex::new(MixerHealthState {
-            backend,
-            started_at: Instant::now(),
-            microphone_underruns: 0,
-            system_underruns: 0,
-            microphone_dropped_frames: 0,
-            system_dropped_frames: 0,
-            microphone_peak_queue_frames: 0,
-            system_peak_queue_frames: 0,
-        }),
-    });
-
+fn attach_queue<B: MixerBackend>() -> (MixerSource, Arc<MixerHealthSession>) {
     PENDING_MIXER_SESSION.with(|slot| {
-        *slot.borrow_mut() = Some(PendingMixerSession {
-            health,
-            next_source: 0,
-            chunk_frames: chunk_frames.max(1),
-            max_frames: max_frames.max(chunk_frames.max(1)),
+        let mut pending = slot.borrow_mut();
+        if let Some(session) = pending.as_ref() {
+            if session.backend_id == B::ID {
+                let health = session.health.clone();
+                pending.take();
+                return (MixerSource::System, health);
+            }
+        }
+
+        let health = Arc::new(MixerHealthSession {
+            state: Mutex::new(MixerHealthState {
+                backend: B::LABEL,
+                started_at: Instant::now(),
+                microphone_underruns: 0,
+                system_underruns: 0,
+                microphone_dropped_frames: 0,
+                system_dropped_frames: 0,
+                microphone_peak_queue_frames: 0,
+                system_peak_queue_frames: 0,
+            }),
         });
-    });
+        *pending = Some(PendingMixerSession {
+            backend_id: B::ID,
+            health: health.clone(),
+        });
+        (MixerSource::Microphone, health)
+    })
 }
 
 /// Drop-in replacement for the recorder's local `VecDeque<[f32; 2]>` queues.
@@ -146,57 +166,25 @@ pub fn start_audio_mixer_segment(
 /// `len()` counts an underrun only after the queue has supplied its first full
 /// mixer chunk. This excludes the intentional startup prebuffer. `extend()`
 /// retains the existing newest-data policy while counting evicted old frames.
-pub struct InstrumentedVecDeque<T> {
+pub struct InstrumentedVecDeque<T, B: MixerBackend> {
     frames: VecDeque<T>,
-    source: Option<MixerSource>,
-    chunk_frames: usize,
-    max_frames: usize,
-    health: Option<Arc<MixerHealthSession>>,
+    source: MixerSource,
+    health: Arc<MixerHealthSession>,
     mixing_started: Cell<bool>,
     suppress_next_len_check: Cell<bool>,
+    backend: PhantomData<B>,
 }
 
-impl<T> InstrumentedVecDeque<T> {
+impl<T, B: MixerBackend> InstrumentedVecDeque<T, B> {
     pub fn new() -> Self {
-        let configured = PENDING_MIXER_SESSION.with(|slot| {
-            let mut pending = slot.borrow_mut();
-            let Some(session) = pending.as_mut() else {
-                return None;
-            };
-
-            let source = match session.next_source {
-                0 => MixerSource::Microphone,
-                1 => MixerSource::System,
-                _ => return None,
-            };
-            session.next_source = session.next_source.saturating_add(1);
-            let result = (
-                source,
-                session.chunk_frames,
-                session.max_frames,
-                session.health.clone(),
-            );
-            if session.next_source >= 2 {
-                pending.take();
-            }
-            Some(result)
-        });
-
-        let (source, chunk_frames, max_frames, health) = match configured {
-            Some((source, chunk_frames, max_frames, health)) => {
-                (Some(source), chunk_frames, max_frames, Some(health))
-            }
-            None => (None, usize::MAX, usize::MAX, None),
-        };
-
+        let (source, health) = attach_queue::<B>();
         Self {
             frames: VecDeque::new(),
             source,
-            chunk_frames,
-            max_frames,
             health,
             mixing_started: Cell::new(false),
             suppress_next_len_check: Cell::new(false),
+            backend: PhantomData,
         }
     }
 
@@ -206,10 +194,8 @@ impl<T> InstrumentedVecDeque<T> {
             return len;
         }
 
-        if self.mixing_started.get() && len < self.chunk_frames {
-            if let (Some(source), Some(health)) = (self.source, self.health.as_ref()) {
-                health.state.lock().record_underrun(source);
-            }
+        if self.mixing_started.get() && len < MIX_CHUNK_FRAMES {
+            self.health.state.lock().record_underrun(self.source);
         }
         len
     }
@@ -223,34 +209,29 @@ impl<T> InstrumentedVecDeque<T> {
     }
 }
 
-impl<T> Default for InstrumentedVecDeque<T> {
+impl<T, B: MixerBackend> Default for InstrumentedVecDeque<T, B> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<T> Extend<T> for InstrumentedVecDeque<T> {
+impl<T, B: MixerBackend> Extend<T> for InstrumentedVecDeque<T, B> {
     fn extend<I: IntoIterator<Item = T>>(&mut self, iter: I) {
         self.frames.extend(iter);
+        self.health
+            .state
+            .lock()
+            .record_queue_depth(self.source, self.frames.len());
 
-        if let (Some(source), Some(health)) = (self.source, self.health.as_ref()) {
-            health
-                .state
-                .lock()
-                .record_queue_depth(source, self.frames.len());
-        }
-
-        let dropped = self.frames.len().saturating_sub(self.max_frames);
+        let dropped = self.frames.len().saturating_sub(MAX_MIX_QUEUE_FRAMES);
         for _ in 0..dropped {
             self.frames.pop_front();
         }
         if dropped > 0 {
-            if let (Some(source), Some(health)) = (self.source, self.health.as_ref()) {
-                health
-                    .state
-                    .lock()
-                    .record_dropped_frames(source, dropped);
-            }
+            self.health
+                .state
+                .lock()
+                .record_dropped_frames(self.source, dropped);
         }
 
         // The existing backend performs an immediate `len() > MAX` check after
@@ -259,3 +240,6 @@ impl<T> Extend<T> for InstrumentedVecDeque<T> {
         self.suppress_next_len_check.set(true);
     }
 }
+
+pub type GpuVecDeque<T> = InstrumentedVecDeque<T, GpuMixerBackend>;
+pub type BufferVecDeque<T> = InstrumentedVecDeque<T, BufferMixerBackend>;
