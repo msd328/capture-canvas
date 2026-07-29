@@ -91,10 +91,7 @@ pub mod encoder {
         }
     }
 
-    /// Final facade layer that preserves the existing encoder health wrapper while
-    /// correlating successful submissions with camera and A/V timeline diagnostics.
-    pub struct VideoEncoder {
-        inner: crate::implementation::encoder::VideoEncoder,
+    struct AvSubmissionHealth {
         output_path: PathBuf,
         audio_format: Option<AudioFormat>,
         audio_bytes: u64,
@@ -105,31 +102,17 @@ pub mod encoder {
         first_video_wall: Option<Instant>,
         first_video_timestamp_hns: Option<i64>,
         last_video_timestamp_hns: Option<i64>,
-        suppress_av_log: bool,
+        suppress_log: bool,
     }
 
-    impl VideoEncoder {
-        pub fn new<P: AsRef<Path>>(
-            video_settings: VideoSettingsBuilder,
-            audio_settings: AudioSettingsBuilder,
-            container_settings: ContainerSettingsBuilder,
-            path: P,
-        ) -> Result<Self, VideoEncoderError> {
-            let output_path = path.as_ref().to_path_buf();
-            let suppress_av_log = output_path
+    impl AvSubmissionHealth {
+        fn new(output_path: PathBuf, audio_format: Option<AudioFormat>) -> Self {
+            let suppress_log = output_path
                 .file_name()
                 .and_then(|value| value.to_str())
                 .map(|value| value.starts_with("recorder-native-warmup-"))
                 .unwrap_or(false);
-            let (audio_settings, audio_format) = audio_settings.into_parts();
-            crate::implementation::encoder::VideoEncoder::new(
-                video_settings,
-                audio_settings,
-                container_settings,
-                &output_path,
-            )
-            .map(|inner| Self {
-                inner,
+            Self {
                 output_path,
                 audio_format,
                 audio_bytes: 0,
@@ -140,8 +123,8 @@ pub mod encoder {
                 first_video_wall: None,
                 first_video_timestamp_hns: None,
                 last_video_timestamp_hns: None,
-                suppress_av_log,
-            })
+                suppress_log,
+            }
         }
 
         fn record_video_success(&mut self, timestamp_hns: Option<i64>) {
@@ -174,8 +157,8 @@ pub mod encoder {
                 .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
         }
 
-        fn log_av_health(&self, finalize_ok: bool) {
-            if self.suppress_av_log {
+        fn log(&self, finalize_ok: bool) {
+            if self.suppress_log {
                 return;
             }
             let Some(format) = self.audio_format else {
@@ -241,12 +224,41 @@ pub mod encoder {
                 );
             }
         }
+    }
+
+    /// Final facade layer that preserves the existing encoder health wrapper while
+    /// correlating successful submissions with camera and A/V timeline diagnostics.
+    pub struct VideoEncoder {
+        inner: crate::implementation::encoder::VideoEncoder,
+        av_health: AvSubmissionHealth,
+    }
+
+    impl VideoEncoder {
+        pub fn new<P: AsRef<Path>>(
+            video_settings: VideoSettingsBuilder,
+            audio_settings: AudioSettingsBuilder,
+            container_settings: ContainerSettingsBuilder,
+            path: P,
+        ) -> Result<Self, VideoEncoderError> {
+            let output_path = path.as_ref().to_path_buf();
+            let (audio_settings, audio_format) = audio_settings.into_parts();
+            crate::implementation::encoder::VideoEncoder::new(
+                video_settings,
+                audio_settings,
+                container_settings,
+                &output_path,
+            )
+            .map(|inner| Self {
+                inner,
+                av_health: AvSubmissionHealth::new(output_path, audio_format),
+            })
+        }
 
         pub fn send_frame(&mut self, frame: &Frame) -> Result<(), VideoEncoderError> {
             let timestamp = frame.timestamp().ok().map(|value| value.Duration);
             let result = self.inner.send_frame(frame);
             if result.is_ok() {
-                self.record_video_success(timestamp);
+                self.av_health.record_video_success(timestamp);
                 diagnostics::record_camera_overlay_submission();
             }
             result
@@ -259,7 +271,7 @@ pub mod encoder {
         ) -> Result<(), VideoEncoderError> {
             let result = self.inner.send_frame_buffer(buffer, timestamp);
             if result.is_ok() {
-                self.record_video_success(Some(timestamp));
+                self.av_health.record_video_success(Some(timestamp));
                 diagnostics::record_camera_overlay_submission();
             }
             result
@@ -272,49 +284,17 @@ pub mod encoder {
         ) -> Result<(), VideoEncoderError> {
             let result = self.inner.send_audio_buffer(buffer, timestamp);
             if result.is_ok() {
-                self.record_audio_success(buffer.len());
+                self.av_health.record_audio_success(buffer.len());
             }
             result
         }
 
         pub fn finish(self) -> Result<(), VideoEncoderError> {
-            let Self {
-                inner,
-                output_path,
-                audio_format,
-                audio_bytes,
-                audio_buffers,
-                first_audio_wall,
-                last_audio_wall,
-                max_audio_submit_gap_ms,
-                first_video_wall,
-                first_video_timestamp_hns,
-                last_video_timestamp_hns,
-                suppress_av_log,
-            } = self;
+            let Self { inner, av_health } = self;
             let result = inner.finish();
-            let health = Self {
-                inner: unreachable_encoder(),
-                output_path,
-                audio_format,
-                audio_bytes,
-                audio_buffers,
-                first_audio_wall,
-                last_audio_wall,
-                max_audio_submit_gap_ms,
-                first_video_wall,
-                first_video_timestamp_hns,
-                last_video_timestamp_hns,
-                suppress_av_log,
-            };
-            health.log_av_health(result.is_ok());
-            std::mem::forget(health);
+            av_health.log(result.is_ok());
             diagnostics::finish_camera_segment(result.is_ok());
             result
         }
-    }
-
-    fn unreachable_encoder() -> crate::implementation::encoder::VideoEncoder {
-        panic!("A/V health logging must not access a finalized encoder")
     }
 }
