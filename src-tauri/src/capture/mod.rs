@@ -14,10 +14,36 @@ use anyhow::Result;
 mod metrics;
 #[cfg(windows)]
 mod preview;
+
+// Compile the two mature recorder backends unchanged while substituting only their
+// local `VecDeque` import with the instrumented mixer queue. `::std` always names
+// the real standard-library crate; the nested `std` module is visible only inside
+// the included backend and preserves every other qualified standard-library path.
 #[cfg(windows)]
-mod wgc;
+mod wgc {
+    mod std {
+        pub use ::std::{ffi, fs, io, mem, path, process, sync, thread, time};
+
+        pub mod collections {
+            pub use windows_capture::mixer_diagnostics::BufferVecDeque as VecDeque;
+        }
+    }
+
+    include!("wgc.rs");
+}
+
 #[cfg(windows)]
-mod wgc_gpu;
+mod wgc_gpu {
+    mod std {
+        pub use ::std::{ffi, fs, io, mem, path, process, sync, thread, time};
+
+        pub mod collections {
+            pub use windows_capture::mixer_diagnostics::GpuVecDeque as VecDeque;
+        }
+    }
+
+    include!("wgc_gpu.rs");
+}
 
 #[cfg(windows)]
 pub enum NativeVideoCapture {
