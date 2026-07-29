@@ -21,17 +21,22 @@ fn user_home() -> Result<PathBuf, String> {
         .ok_or_else(|| "Unable to determine the current user's home directory".to_string())
 }
 
-/// Return the canonical app-approved directory for completed MP4 recordings.
+fn recordings_root_display_path() -> Result<PathBuf, String> {
+    Ok(user_home()?.join("Recordings"))
+}
+
+/// Return the canonical app-approved directory for security comparisons.
 pub fn recordings_root() -> Result<PathBuf, String> {
-    let root = user_home()?.join("Recordings");
+    let root = recordings_root_display_path()?;
     fs::create_dir_all(&root)
         .map_err(|error| format!("Unable to create the approved recording directory: {error}"))?;
     fs::canonicalize(&root)
         .map_err(|error| format!("Unable to resolve the approved recording directory: {error}"))
 }
 
+/// Return the normal user-facing path rather than Windows' extended canonical path.
 pub fn recordings_root_string() -> Result<String, String> {
-    Ok(recordings_root()?.to_string_lossy().into_owned())
+    Ok(recordings_root_display_path()?.to_string_lossy().into_owned())
 }
 
 pub fn validate_recording_id(id: &str) -> Result<(), String> {
@@ -114,14 +119,14 @@ pub fn validate_settings(mut settings: RecorderSettings) -> Result<RecorderSetti
             .map(|path| path == approved)
             .unwrap_or(false)
     } else {
-        requested == user_home()?.join("Recordings")
+        requested == recordings_root_display_path()?
     };
     if !requested_is_approved {
         return Err(
             "The output directory must be the app-approved Recordings directory".to_string(),
         );
     }
-    settings.output_directory = approved.to_string_lossy().into_owned();
+    settings.output_directory = recordings_root_string()?;
     Ok(settings)
 }
 
