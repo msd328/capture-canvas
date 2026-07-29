@@ -1,13 +1,9 @@
-// Compile the instrumentation implementation as a nested module so its private
-// delivery state remains encapsulated while the public facade modules are
-// re-exported at the crate root.
-mod implementation {
-    include!("lib.rs");
-
-    // `lib.rs` historically imported `Instant` at its top level while the encoder
-    // module also imported it locally. Keep the top-level binding intentionally
-    // used until the implementation file is split into smaller modules.
-    const _: fn() -> Instant = Instant::now;
-}
+// Load the instrumentation implementation as a normal Rust module. Using a
+// module path keeps the `//!` comments at the top of lib.rs valid as inner
+// module documentation, while the crate's Rust 2024 edition retains the
+// callback-guard temporary lifetime fix.
+#[allow(unused_imports)]
+#[path = "lib.rs"]
+mod implementation;
 
 pub use implementation::*;
