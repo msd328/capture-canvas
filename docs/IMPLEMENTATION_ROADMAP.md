@@ -25,8 +25,8 @@ Every implementation update must also include the security-impact block defined 
 1. Rebuild the recorder after the E0753 facade fix and the first security-hardening batch.
 2. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
 3. Run negative tests against tampered recording metadata, invalid UUIDs, custom output paths, and out-of-root files.
-4. Validate timeline coverage and WGC delivery diagnostics on Windows.
-5. Complete remaining Rust command validation, camera counters, and audio-mixer counters.
+4. Validate timeline coverage, WGC delivery, and camera health diagnostics on Windows.
+5. Implement audio-mixer underrun/queue-drop counters and complete remaining Rust command validation.
 6. Verify and fix static-screen duration continuity.
 7. Reduce warm Start, Pause, Resume, and Stop latency.
 8. Remove the remaining FFmpeg compatibility paths.
@@ -98,7 +98,7 @@ Every implementation update must also include the security-impact block defined 
 | CAM-04 | ✅ | Persistent D3D11 camera texture | Per-frame texture allocation removed |
 | CAM-05 | ✅ | Camera with microphone/system-audio combinations | Previously observed working combinations |
 | CAM-06 | 🟡 | FFmpeg/DirectShow camera compatibility fallback | Fallback retained but distribution policy unresolved |
-| CAM-07 | 🔵 | Camera received/applied/drop counters | Camera health line emitted at Stop |
+| CAM-07 | 🟡 | Camera received/applied/source-miss counters | `CameraHealth` implemented for native/fallback sources and both encoder paths; Windows camera runtime log pending |
 | CAM-08 | 🔵 | Direct GPU camera-frame path | Avoid per-frame SoftwareBitmap CPU copy |
 | CAM-09 | 🔵 | Camera disconnect/reconnect handling | No recorder hang on disconnect |
 | CAM-10 | ⚪ | Camera position selector | Four-corner placement |
@@ -140,7 +140,7 @@ Every implementation update must also include the security-impact block defined 
 | HLT-08 | 🟡 | Audio buffers and bytes submitted | E0753 entry fix committed; rebuild/runtime pending |
 | HLT-09 | 🟡 | WGC frames received | Facade handler wrapper implemented; rebuild/runtime pending after E0753 fix |
 | HLT-10 | 🟡 | FPS-limited frames skipped | Timestamp/target-FPS limiter mirror implemented; rebuild/runtime pending after E0753 fix |
-| HLT-11 | 🔵 | Camera frames received/applied | Camera/capture counters |
+| HLT-11 | 🟡 | Camera frames received/applied/source misses | Per-segment `CameraHealth` line and warnings implemented; Windows runtime validation pending |
 | HLT-12 | 🔵 | Mixer underruns and queue overflows | Mixer counters |
 | HLT-13 | 🔵 | Audio/video drift | Millisecond drift report |
 | HLT-14 | ⚪ | Exportable diagnostic report | Copy/save support bundle |
@@ -320,3 +320,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-29 | `a96773e..16a6595` | Added canonical UUID/file/root guards, command validation, settings normalisation, startup metadata filtering, and protected thumbnail/open/delete paths; SEC-04/06 → 🟡 |
 | 2026-07-29 | `86c3a8b..15093a5` | Added main-window capability, removed unused Tauri plugins, enabled strict CSP, and restricted the asset protocol; SEC-02/03/05 → 🟡 |
 | 2026-07-29 | `eaa5edc` | Updated the security baseline with implemented controls, validation requirements, and remaining risks |
+| 2026-07-29 | `857c123..7c0ae5e` | Added shared native/fallback camera source counters and encoder-correlated overlay submissions; CAM-07 and HLT-11 → 🟡 |
