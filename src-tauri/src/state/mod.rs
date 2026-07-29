@@ -6,6 +6,7 @@
 use crate::{
     encoding,
     recording::{types::*, RecordingEngine},
+    security,
 };
 use parking_lot::{Mutex, RwLock};
 use serde::de::DeserializeOwned;
@@ -24,14 +25,25 @@ pub struct LibraryStore {
 impl LibraryStore {
     fn new(path: PathBuf) -> Self {
         let mut recordings: Vec<RecordingOutput> = load_json(&path).unwrap_or_default();
-        // Do not keep dead cards forever when a user manually moves/deletes a
-        // recording outside the app or an older stub created a 0-byte entry.
+        // Persisted metadata is untrusted. Keep only non-empty UUID-named MP4 files
+        // that canonicalise to a direct child of the approved Recordings directory.
         recordings.retain(|recording| {
-            let media_path = Path::new(&recording.file_path);
-            media_path
-                .metadata()
-                .map(|metadata| metadata.is_file() && metadata.len() > 0)
-                .unwrap_or(false)
+            match security::validate_existing_recording_path(
+                &recording.id,
+                &recording.file_path,
+            ) {
+                Ok(canonical) => {
+                    recording.file_path = canonical.to_string_lossy().into_owned();
+                    true
+                }
+                Err(error) => {
+                    eprintln!(
+                        "[Recorder][Security] library_entry_rejected=true id={} error={error}",
+                        recording.id
+                    );
+                    false
+                }
+            }
         });
         let store = Self {
             recordings: Arc::new(RwLock::new(recordings)),
@@ -52,20 +64,26 @@ impl LibraryStore {
     /// Stop transaction. The shared library entry and recordings.json are updated
     /// after Windows returns the thumbnail.
     pub fn schedule_thumbnail_async(&self, id: String, file_path: String) {
+        let worker_path = match security::validate_existing_recording_path(&id, &file_path) {
+            Ok(path) => path,
+            Err(error) => {
+                eprintln!(
+                    "[Recorder][Security] thumbnail_path_rejected=true id={id} error={error}"
+                );
+                return;
+            }
+        };
         let recordings = Arc::clone(&self.recordings);
         let metadata_path = self.path.clone();
         let persist_lock = Arc::clone(&self.persist_lock);
         let worker_id = id.clone();
-        let worker_path = file_path.clone();
         let spawn_result = std::thread::Builder::new()
             .name("recorder-thumbnail".to_string())
             .spawn(move || {
                 let started = std::time::Instant::now();
-                let Some(thumbnail) =
-                    encoding::generate_thumbnail_data_url(Path::new(&worker_path))
-                else {
+                let Some(thumbnail) = encoding::generate_thumbnail_data_url(&worker_path) else {
                     eprintln!(
-                        "[Recorder][Health] thumbnail_ok=false id={worker_id} path={worker_path}"
+                        "[Recorder][Health] thumbnail_ok=false id={worker_id}"
                     );
                     return;
                 };
@@ -103,7 +121,7 @@ impl LibraryStore {
 
         if let Err(error) = spawn_result {
             eprintln!(
-                "[Recorder][Health] thumbnail_ok=false id={id} path={file_path} error=unable_to_spawn_thumbnail_worker:{error}"
+                "[Recorder][Health] thumbnail_ok=false id={id} error=unable_to_spawn_thumbnail_worker:{error}"
             );
         }
     }
@@ -112,12 +130,19 @@ impl LibraryStore {
     /// One worker processes the pending list sequentially to avoid flooding the
     /// Windows thumbnail cache with parallel requests during application startup.
     pub fn refresh_thumbnails_async(&self) {
-        let pending: Vec<(String, String)> = self
+        let pending: Vec<(String, PathBuf)> = self
             .recordings
             .read()
             .iter()
             .filter(|recording| recording.thumbnail_data_url.is_none())
-            .map(|recording| (recording.id.clone(), recording.file_path.clone()))
+            .filter_map(|recording| {
+                security::validate_existing_recording_path(
+                    &recording.id,
+                    &recording.file_path,
+                )
+                .ok()
+                .map(|path| (recording.id.clone(), path))
+            })
             .collect();
         if pending.is_empty() {
             return;
@@ -131,9 +156,7 @@ impl LibraryStore {
             .spawn(move || {
                 let mut generated = 0usize;
                 for (id, file_path) in pending {
-                    let Some(thumbnail) =
-                        encoding::generate_thumbnail_data_url(Path::new(&file_path))
-                    else {
+                    let Some(thumbnail) = encoding::generate_thumbnail_data_url(&file_path) else {
                         continue;
                     };
                     let mut guard = recordings.write();
@@ -175,8 +198,19 @@ pub struct SettingsStore {
 
 impl SettingsStore {
     fn new(path: PathBuf) -> Self {
+        let loaded: RecorderSettings = load_json(&path).unwrap_or_default();
+        let settings = security::validate_settings(loaded).unwrap_or_else(|error| {
+            eprintln!(
+                "[Recorder][Security] settings_reset=true error={error}"
+            );
+            let mut defaults = RecorderSettings::default();
+            if let Ok(root) = security::recordings_root_string() {
+                defaults.output_directory = root;
+            }
+            defaults
+        });
         Self {
-            settings: RwLock::new(load_json(&path).unwrap_or_default()),
+            settings: RwLock::new(settings),
             path,
         }
     }
