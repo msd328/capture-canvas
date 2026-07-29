@@ -53,8 +53,6 @@
       },
       "headers": {
         "X-Content-Type-Options": "nosniff",
-        "Cross-Origin-Opener-Policy": "same-origin",
-        "Cross-Origin-Resource-Policy": "same-origin",
         "Permissions-Policy": "camera=(), microphone=(), geolocation=(), usb=(), payment=()"
       },
       "assetProtocol": {
