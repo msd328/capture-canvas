@@ -25,8 +25,8 @@ Every implementation update must also include the security-impact block defined 
 1. Rebuild the recorder after the E0753 facade fix and the first security-hardening batch.
 2. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
 3. Run negative tests against tampered recording metadata, invalid UUIDs, custom output paths, and out-of-root files.
-4. Validate timeline coverage, WGC delivery, camera health, submitted A/V drift, and audio-mixer health diagnostics on Windows.
-5. Complete remaining Rust command validation and inspect any mixer underruns or queue drops found by runtime testing.
+4. Validate timeline coverage, WGC delivery, camera health, submitted A/V drift, audio-mixer health, and control-phase diagnostics on Windows.
+5. Inspect Start/Pause/Resume/Stop timing fields, then refine slow engine sub-phases where evidence shows a bottleneck.
 6. Verify and fix static-screen duration continuity.
 7. Reduce warm Start, Pause, Resume, and Stop latency.
 8. Remove the remaining FFmpeg compatibility paths.
@@ -120,8 +120,8 @@ Every implementation update must also include the security-impact block defined 
 | CTRL-07 | ✅ | Pause produces independent MP4 segments | Pause/Resume architecture active |
 | CTRL-08 | 🟡 | Windows MediaComposition primary finaliser | Output quality/duration matrix pending |
 | CTRL-09 | ✅ | FFmpeg emergency concat fallback | Fallback implemented |
-| CTRL-10 | 🔵 | Start-stage timing breakdown | Resolve/device/audio/camera/encoder timing |
-| CTRL-11 | 🔵 | Stop-stage timing breakdown | Capture/audio/finaliser/library timing |
+| CTRL-10 | 🟡 | Start-stage timing breakdown | Command validation and total engine-start timing implemented; native resolve/device/audio/camera/encoder sub-phase refinement and Windows runtime evidence pending |
+| CTRL-11 | 🟡 | Stop-stage timing breakdown | Engine stop/finalisation total plus path validation, library insertion, persistence and thumbnail scheduling timings implemented; internal capture/audio/finaliser split and Windows runtime evidence pending |
 | CTRL-12 | 🔵 | Pause/Resume without re-encoding | Timestamp rebasing/direct remux |
 | CTRL-13 | 🔵 | Bounded native finalisation timeout | Stop cannot wait indefinitely |
 | CTRL-14 | ⚪ | Cancel while Starting | Safe cancellation |
@@ -146,6 +146,7 @@ Every implementation update must also include the security-impact block defined 
 | HLT-14 | ⚪ | Exportable diagnostic report | Copy/save support bundle |
 | HLT-15 | ⚪ | User-friendly health summary | Non-technical UI status |
 | HLT-16 | 🟡 | Expected-frame timeline coverage and deficit | Facade rebuild/runtime pending after E0753 entry fix |
+| HLT-17 | 🟡 | Recorder control-phase timing and failure stage | `ControlHealth` lines implemented for Start/Pause/Resume/Stop; Windows compile and timing-field validation pending |
 
 ## Recording library
 
@@ -323,3 +324,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-29 | `857c123..7c0ae5e` | Added shared native/fallback camera source counters and encoder-correlated overlay submissions; CAM-07 and HLT-11 → 🟡 |
 | 2026-07-29 | `9a95245..9adc100` | Added submitted PCM/video timeline duration, startup-offset and audio-submission-gap diagnostics; AUD-10 and HLT-13 → 🟡 |
 | 2026-07-29 | `8a8990e..d8496d8` | Added per-source mixer underrun, queue-drop and peak-depth diagnostics for both Windows capture backends; AUD-08, AUD-09 and HLT-12 → 🟡 |
+| 2026-07-29 | `78e758f` | Added command/engine boundary timings and failure-stage diagnostics; CTRL-10, CTRL-11 and HLT-17 → 🟡 |
