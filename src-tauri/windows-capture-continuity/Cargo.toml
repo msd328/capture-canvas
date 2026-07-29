@@ -1,0 +1,12 @@
+[package]
+name = "windows-capture-continuity"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "windows_capture"
+path = "src/lib.rs"
+
+[dependencies]
+windows_capture_base = { package = "windows-capture-facade", path = "../windows-capture-facade" }
