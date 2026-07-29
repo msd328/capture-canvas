@@ -41,8 +41,8 @@ pub fn recordings_root_string() -> Result<String, String> {
 
 pub fn validate_recording_id(id: &str) -> Result<(), String> {
     let parsed = Uuid::parse_str(id).map_err(|_| "Invalid recording ID".to_string())?;
-    if parsed.to_string() != id.to_ascii_lowercase() {
-        return Err("Recording ID must use the canonical UUID format".to_string());
+    if parsed.to_string() != id {
+        return Err("Recording ID must use the canonical lowercase UUID format".to_string());
     }
     Ok(())
 }
