@@ -21,6 +21,7 @@ mod preview;
 // the included backend and preserves every other qualified standard-library path.
 #[cfg(windows)]
 mod wgc {
+    #[allow(unused_imports)]
     mod std {
         pub use ::std::{ffi, fs, io, mem, path, process, sync, thread, time};
 
@@ -34,6 +35,7 @@ mod wgc {
 
 #[cfg(windows)]
 mod wgc_gpu {
+    #[allow(unused_imports)]
     mod std {
         pub use ::std::{ffi, fs, io, mem, path, process, sync, thread, time};
 
