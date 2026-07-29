@@ -20,7 +20,8 @@ enum MixerSource {
     System,
 }
 
-trait MixerBackend {
+#[doc(hidden)]
+pub trait MixerBackend {
     const ID: u8;
     const LABEL: &'static str;
 }
