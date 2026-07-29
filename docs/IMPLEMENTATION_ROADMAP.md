@@ -8,23 +8,28 @@ This document is the source of truth for recorder implementation status on
 Every implementation batch must update this file in the same commit series as the
 code change. Status is based on evidence, not intent:
 
-- ✅ **Validated** — implemented and verified by a successful Windows build/runtime test.
-- 🟡 **Implemented, validation pending** — code is present, but the current Windows build or runtime behaviour has not yet been confirmed.
+- ✅ **Validated** — implemented and verified by a successful build, runtime test, security test, or CI evidence appropriate to the item.
+- 🟡 **Implemented, validation pending** — code or policy is present, but its current build/runtime/security behaviour has not yet been confirmed.
 - 🔵 **Next** — selected for the next implementation batches.
 - ⚪ **Planned** — accepted roadmap work, not currently being implemented.
 - ⛔ **Postponed** — deliberately deferred until a prerequisite is complete.
 
-A pushed commit alone does not move an item to ✅. Compiler output, runtime logs, or CI
-must provide the validation evidence.
+A pushed commit alone does not move an item to ✅. Compiler output, runtime logs, CI,
+negative tests, or documented review evidence must provide validation.
+
+Every implementation update must also include the security-impact block defined in
+`docs/SECURITY_BASELINE.md`, explicitly using `None` for fields that do not apply.
 
 ## Current focus
 
-1. Revalidate the local external `windows_capture` facade after the E0597 callback-guard lifetime fix.
-2. Validate timeline coverage and WGC delivery diagnostics on Windows.
-3. Complete camera and audio-mixer counters.
-4. Verify and fix static-screen duration continuity.
-5. Reduce warm Start, Pause, Resume, and Stop latency.
-6. Remove the remaining FFmpeg compatibility paths.
+1. Revalidate the local external `windows_capture` facade after the E0753 module-documentation fix.
+2. Implement the critical Tauri security baseline: CSP, minimal capabilities, and restricted asset access.
+3. Canonicalise and allowlist recording paths for create/delete/open/thumbnail operations.
+4. Validate timeline coverage and WGC delivery diagnostics on Windows.
+5. Complete camera and audio-mixer counters.
+6. Verify and fix static-screen duration continuity.
+7. Reduce warm Start, Pause, Resume, and Stop latency.
+8. Remove the remaining FFmpeg compatibility paths.
 
 ---
 
@@ -56,7 +61,7 @@ must provide the validation evidence.
 | VID-05 | ✅ | Resolution-dependent bitrate selection | Health logs show expected output bitrate range |
 | VID-06 | ✅ | FPS limiting on high-refresh displays | Requested FPS is bounded |
 | VID-07 | 🟡 | Background H.264/AAC encoder warm-up | Compare first Start latency before/after warm-up |
-| VID-08 | 🟡 | Encoder submission counters | Facade reached compilation; E0597 callback-guard lifetime fixed in `7f051ed`, rebuild/runtime pending |
+| VID-08 | 🟡 | Encoder submission counters | E0753 from the include-based entry was replaced by a normal module path in `942e99c`; rebuild/runtime pending |
 | VID-09 | 🟡 | WGC received/skipped/encoded counters | Central facade counter implemented; validate `frames_received`, `frames_rate_limited`, submissions and failures |
 | VID-10 | 🔵 | Static-screen duration continuity | 60 seconds static produces approximately 60 seconds output; timeline deficit diagnostics are available |
 | VID-11 | 🔵 | Pure D3D11 selected-area crop | No CPU BGRA crop copy |
@@ -129,18 +134,18 @@ must provide the validation evidence.
 | HLT-02 | ✅ | Encoder startup duration | `start_ms` emitted |
 | HLT-03 | ✅ | Stop/finalisation duration | `stop_ms` emitted |
 | HLT-04 | ✅ | Output size and average bitrate | Bytes/Mbps emitted |
-| HLT-05 | 🟡 | Submitted frames and failures | E0597 callback-guard fix committed; rebuild/runtime pending |
-| HLT-06 | 🟡 | Effective encoded FPS | E0597 callback-guard fix committed; rebuild/runtime pending |
-| HLT-07 | 🟡 | Largest submitted-frame gap | E0597 callback-guard fix committed; rebuild/runtime pending |
-| HLT-08 | 🟡 | Audio buffers and bytes submitted | E0597 callback-guard fix committed; rebuild/runtime pending |
-| HLT-09 | 🟡 | WGC frames received | Facade handler wrapper implemented; rebuild/runtime pending after E0597 fix |
-| HLT-10 | 🟡 | FPS-limited frames skipped | Timestamp/target-FPS limiter mirror implemented; rebuild/runtime pending after E0597 fix |
+| HLT-05 | 🟡 | Submitted frames and failures | E0753 entry fix committed; rebuild/runtime pending |
+| HLT-06 | 🟡 | Effective encoded FPS | E0753 entry fix committed; rebuild/runtime pending |
+| HLT-07 | 🟡 | Largest submitted-frame gap | E0753 entry fix committed; rebuild/runtime pending |
+| HLT-08 | 🟡 | Audio buffers and bytes submitted | E0753 entry fix committed; rebuild/runtime pending |
+| HLT-09 | 🟡 | WGC frames received | Facade handler wrapper implemented; rebuild/runtime pending after E0753 fix |
+| HLT-10 | 🟡 | FPS-limited frames skipped | Timestamp/target-FPS limiter mirror implemented; rebuild/runtime pending after E0753 fix |
 | HLT-11 | 🔵 | Camera frames received/applied | Camera/capture counters |
 | HLT-12 | 🔵 | Mixer underruns and queue overflows | Mixer counters |
 | HLT-13 | 🔵 | Audio/video drift | Millisecond drift report |
 | HLT-14 | ⚪ | Exportable diagnostic report | Copy/save support bundle |
 | HLT-15 | ⚪ | User-friendly health summary | Non-technical UI status |
-| HLT-16 | 🟡 | Expected-frame timeline coverage and deficit | Facade rebuild/runtime pending after E0597 callback-guard fix |
+| HLT-16 | 🟡 | Expected-frame timeline coverage and deficit | Facade rebuild/runtime pending after E0753 entry fix |
 
 ## Recording library
 
@@ -226,9 +231,31 @@ must provide the validation evidence.
 | DIST-09 | ⚪ | Exact dependency/licence audit |
 | DIST-10 | ⚪ | Clean-machine installation test |
 
+## Security and privacy
+
+The detailed policy, trust boundaries, current data inventory, and mandatory status-update template are in `docs/SECURITY_BASELINE.md`.
+
+| ID | Status | Work | Acceptance evidence |
+|---|---:|---|---|
+| SEC-01 | 🟡 | Threat model, data inventory, trust boundaries, and security review policy | Baseline document committed; architecture review and future data-flow updates pending |
+| SEC-02 | 🔵 | Strict production Content Security Policy | Packaged UI works; unapproved script/connect/media origins are blocked |
+| SEC-03 | 🔵 | Replace wildcard asset-protocol scope with recording-only access | Arbitrary local files cannot be loaded through the webview |
+| SEC-04 | 🔵 | Canonical recording-path allowlist for create/delete/open/thumbnail/upload | Traversal, tampered metadata, links/reparse targets, and outside-root paths are rejected |
+| SEC-05 | 🔵 | Minimal Tauri capabilities and plugin set | Every window has only documented permissions; unused plugins removed |
+| SEC-06 | 🔵 | Comprehensive Rust command-input validation and limits | Negative tests cover IDs, titles, FPS, dimensions, crops, paths, and collection sizes |
+| SEC-07 | 🔵 | Remove or authenticate external executable discovery | Production never executes an unverified PATH/environment-selected FFmpeg binary |
+| SEC-08 | 🔵 | Diagnostic-log privacy and redaction | Exportable logs contain no tokens, captured content, usernames, or full local paths |
+| SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot configuration committed; first successful update/alert cycle pending |
+| SEC-10 | 🔵 | Secret scanning and repository protection | Secret scanning enabled; test secret is blocked or detected without entering history |
+| SEC-11 | ⚪ | Signed executable, installer, updater, and update metadata | Signature verification passes on a clean machine |
+| SEC-12 | ⚪ | OS secure storage for future account tokens | Tokens use Windows Credential Manager/macOS Keychain and never JSON/localStorage/logs |
+| SEC-13 | ⚪ | SaaS authentication, object authorisation, tenancy, and rate-limit tests | Cross-user/cross-workspace access attempts are rejected server-side |
+| SEC-14 | ⚪ | Optional encrypted local recording storage | Keys are protected by the OS and recovery/deletion behaviour is documented |
+| SEC-15 | ⚪ | Independent penetration test and remediation verification | High/critical findings resolved before public release |
+
 ## SaaS and sharing
 
-SaaS work starts after the desktop recorder passes the reliability gate.
+SaaS work starts after the desktop recorder passes the reliability and critical-security gates.
 
 | ID | Status | Work |
 |---|---:|---|
@@ -264,7 +291,9 @@ The desktop recorder is not production-ready until all of the following pass:
 - Warm Start, Pause, Resume, and Stop meet latency targets.
 - No production FFmpeg dependency.
 - Crash-safe temporary files and recovery behaviour.
-- Signed installer tested on a clean Windows machine.
+- SEC-02 through SEC-10 completed and validated.
+- Signed installer and updater path tested on a clean Windows machine.
+- Privacy policy, data inventory, dependency/licence report, and incident-response contact completed.
 
 ## Target control latency
 
@@ -285,4 +314,6 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-28 | `4c18cde` | First namespace repair after E0433 build failure; second Windows build exposed root `capture` collision |
 | 2026-07-28 | `840efeb..fcc6b10` | Replaced the conflicting crate-root alias with a local external `windows_capture` facade crate; VID-08 and HLT-05–08/16 remain 🟡 pending rebuild |
 | 2026-07-28 | `e949aba..b52ae4a` | Added central WGC delivery, FPS-limiter, capture-gap and processing-deficit counters; VID-09 and HLT-09/10 → 🟡 |
-| 2026-07-28 | `885ba57..7f051ed` | Fixed E0597 callback guard lifetime through the Rust 2024 facade entry wrapper and removed the unused `Instant` warning; validation remains pending |
+| 2026-07-28 | `885ba57..7f051ed` | Fixed E0597 callback guard lifetime through the Rust 2024 facade entry wrapper; validation remained pending |
+| 2026-07-29 | `942e99c` | Replaced `include!` with a normal module path after E0753 inner-documentation errors; facade validation remains pending |
+| 2026-07-29 | `41cddbf..7f93bbc` | Added the security baseline and weekly npm/Cargo dependency monitoring; SEC-01 and SEC-09 → 🟡, SEC-02–08/10 → 🔵 |
