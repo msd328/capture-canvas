@@ -50,7 +50,8 @@ windows_capture_windows = { package = "windows", version = "0.62.2", features = 
 # feed PCM into the Windows encoder/mixer.
 cpal = "0.15"
 hound = "3.5"
-# Local external-crate facade over the MIT-licensed windows-capture 2.0 package.
-# Keeping the facade as a real dependency preserves `windows_capture::...` paths
-# without colliding with this application's own root `capture` module.
-windows_capture = { package = "windows-capture-facade", path = "windows-capture-facade" }
+# Final local facade layering:
+# recorder -> static-tail continuity -> health diagnostics -> MIT windows-capture 2.0.
+# The dependency remains a real external crate named `windows_capture`, avoiding
+# collision with this application's root `capture` module.
+windows_capture = { package = "windows-capture-continuity", path = "windows-capture-continuity" }
