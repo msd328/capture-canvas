@@ -27,15 +27,12 @@ impl LibraryStore {
         let mut recordings: Vec<RecordingOutput> = load_json(&path).unwrap_or_default();
         // Persisted metadata is untrusted. Keep only non-empty UUID-named MP4 files
         // that canonicalise to a direct child of the approved Recordings directory.
-        recordings.retain_mut(|recording| {
+        recordings.retain(|recording| {
             match security::validate_existing_recording_path(
                 &recording.id,
                 &recording.file_path,
             ) {
-                Ok(canonical) => {
-                    recording.file_path = canonical.to_string_lossy().into_owned();
-                    true
-                }
+                Ok(_) => true,
                 Err(error) => {
                     eprintln!(
                         "[Recorder][Security] library_entry_rejected=true id={} error={error}",
@@ -82,9 +79,7 @@ impl LibraryStore {
             .spawn(move || {
                 let started = std::time::Instant::now();
                 let Some(thumbnail) = encoding::generate_thumbnail_data_url(&worker_path) else {
-                    eprintln!(
-                        "[Recorder][Health] thumbnail_ok=false id={worker_id}"
-                    );
+                    eprintln!("[Recorder][Health] thumbnail_ok=false id={worker_id}");
                     return;
                 };
 
@@ -200,9 +195,7 @@ impl SettingsStore {
     fn new(path: PathBuf) -> Self {
         let loaded: RecorderSettings = load_json(&path).unwrap_or_default();
         let settings = security::validate_settings(loaded).unwrap_or_else(|error| {
-            eprintln!(
-                "[Recorder][Security] settings_reset=true error={error}"
-            );
+            eprintln!("[Recorder][Security] settings_reset=true error={error}");
             let mut defaults = RecorderSettings::default();
             if let Ok(root) = security::recordings_root_string() {
                 defaults.output_directory = root;
@@ -243,7 +236,10 @@ fn app_data_dir() -> PathBuf {
         return PathBuf::from(value).join("Recorder");
     }
     if let Some(home) = std::env::var_os("USERPROFILE") {
-        return PathBuf::from(home).join("AppData").join("Roaming").join("Recorder");
+        return PathBuf::from(home)
+            .join("AppData")
+            .join("Roaming")
+            .join("Recorder");
     }
     PathBuf::from(".").join("RecorderData")
 }
@@ -255,13 +251,17 @@ fn load_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
 
 fn write_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("Unable to create app-data directory: {e}"))?;
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Unable to create app-data directory: {error}"))?;
     }
-    let bytes = serde_json::to_vec_pretty(value).map_err(|e| format!("Unable to serialize local data: {e}"))?;
+    let bytes = serde_json::to_vec_pretty(value)
+        .map_err(|error| format!("Unable to serialize local data: {error}"))?;
     let temp = path.with_extension("tmp");
-    fs::write(&temp, bytes).map_err(|e| format!("Unable to write local data: {e}"))?;
+    fs::write(&temp, bytes).map_err(|error| format!("Unable to write local data: {error}"))?;
     if path.exists() {
-        fs::remove_file(path).map_err(|e| format!("Unable to replace local data: {e}"))?;
+        fs::remove_file(path)
+            .map_err(|error| format!("Unable to replace local data: {error}"))?;
     }
-    fs::rename(&temp, path).map_err(|e| format!("Unable to finalize local data: {e}"))
+    fs::rename(&temp, path)
+        .map_err(|error| format!("Unable to finalize local data: {error}"))
 }
