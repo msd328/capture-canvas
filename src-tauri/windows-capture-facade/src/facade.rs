@@ -11,21 +11,101 @@ mod implementation;
 pub use implementation::{capture, d3d11, frame, graphics_capture_api, monitor, settings, window};
 
 pub mod encoder {
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::time::Instant;
 
     use crate::diagnostics;
     use crate::frame::Frame;
 
     pub use crate::implementation::encoder::{
-        AudioSettingsBuilder, ContainerSettingsBuilder, ImageEncoder,
-        ImageEncoderPixelFormat, ImageFormat, VideoEncoderError, VideoSettingsBuilder,
-        VideoSettingsSubType,
+        ContainerSettingsBuilder, ImageEncoder, ImageEncoderPixelFormat, ImageFormat,
+        VideoEncoderError, VideoSettingsBuilder, VideoSettingsSubType,
     };
 
+    #[derive(Clone, Copy)]
+    struct AudioFormat {
+        sample_rate: u32,
+        channels: u32,
+        bits_per_sample: u32,
+    }
+
+    /// Drop-in audio settings wrapper that retains the PCM format used for
+    /// submitted-duration and A/V timeline diagnostics.
+    pub struct AudioSettingsBuilder {
+        inner: crate::implementation::encoder::AudioSettingsBuilder,
+        format: AudioFormat,
+        disabled: bool,
+    }
+
+    impl AudioSettingsBuilder {
+        pub fn new() -> Self {
+            Self {
+                inner: crate::implementation::encoder::AudioSettingsBuilder::new(),
+                format: AudioFormat {
+                    sample_rate: 48_000,
+                    channels: 2,
+                    bits_per_sample: 16,
+                },
+                disabled: false,
+            }
+        }
+
+        pub fn sample_rate(mut self, sample_rate: u32) -> Self {
+            self.inner = self.inner.sample_rate(sample_rate);
+            self.format.sample_rate = sample_rate;
+            self
+        }
+
+        pub fn channel_count(mut self, channels: u32) -> Self {
+            self.inner = self.inner.channel_count(channels);
+            self.format.channels = channels;
+            self
+        }
+
+        pub fn bit_per_sample(mut self, bits_per_sample: u32) -> Self {
+            self.inner = self.inner.bit_per_sample(bits_per_sample);
+            self.format.bits_per_sample = bits_per_sample;
+            self
+        }
+
+        pub fn disabled(mut self, disabled: bool) -> Self {
+            self.inner = self.inner.disabled(disabled);
+            self.disabled = disabled;
+            self
+        }
+
+        fn into_parts(
+            self,
+        ) -> (
+            crate::implementation::encoder::AudioSettingsBuilder,
+            Option<AudioFormat>,
+        ) {
+            let format = (!self.disabled).then_some(self.format);
+            (self.inner, format)
+        }
+    }
+
+    impl Default for AudioSettingsBuilder {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     /// Final facade layer that preserves the existing encoder health wrapper while
-    /// correlating successful encoded frames with an active camera source.
+    /// correlating successful submissions with camera and A/V timeline diagnostics.
     pub struct VideoEncoder {
         inner: crate::implementation::encoder::VideoEncoder,
+        output_path: PathBuf,
+        audio_format: Option<AudioFormat>,
+        audio_bytes: u64,
+        audio_buffers: u64,
+        first_audio_wall: Option<Instant>,
+        last_audio_wall: Option<Instant>,
+        max_audio_submit_gap_ms: u128,
+        first_video_wall: Option<Instant>,
+        first_video_timestamp_hns: Option<i64>,
+        last_video_timestamp_hns: Option<i64>,
+        suppress_av_log: bool,
     }
 
     impl VideoEncoder {
@@ -35,18 +115,138 @@ pub mod encoder {
             container_settings: ContainerSettingsBuilder,
             path: P,
         ) -> Result<Self, VideoEncoderError> {
+            let output_path = path.as_ref().to_path_buf();
+            let suppress_av_log = output_path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .map(|value| value.starts_with("recorder-native-warmup-"))
+                .unwrap_or(false);
+            let (audio_settings, audio_format) = audio_settings.into_parts();
             crate::implementation::encoder::VideoEncoder::new(
                 video_settings,
                 audio_settings,
                 container_settings,
-                path,
+                &output_path,
             )
-            .map(|inner| Self { inner })
+            .map(|inner| Self {
+                inner,
+                output_path,
+                audio_format,
+                audio_bytes: 0,
+                audio_buffers: 0,
+                first_audio_wall: None,
+                last_audio_wall: None,
+                max_audio_submit_gap_ms: 0,
+                first_video_wall: None,
+                first_video_timestamp_hns: None,
+                last_video_timestamp_hns: None,
+                suppress_av_log,
+            })
+        }
+
+        fn record_video_success(&mut self, timestamp_hns: Option<i64>) {
+            if self.first_video_wall.is_none() {
+                self.first_video_wall = Some(Instant::now());
+            }
+            let Some(timestamp_hns) = timestamp_hns else {
+                return;
+            };
+            if self.first_video_timestamp_hns.is_none() {
+                self.first_video_timestamp_hns = Some(timestamp_hns);
+            }
+            self.last_video_timestamp_hns = Some(timestamp_hns);
+        }
+
+        fn record_audio_success(&mut self, bytes: usize) {
+            let now = Instant::now();
+            if self.first_audio_wall.is_none() {
+                self.first_audio_wall = Some(now);
+            }
+            if let Some(previous) = self.last_audio_wall {
+                self.max_audio_submit_gap_ms = self
+                    .max_audio_submit_gap_ms
+                    .max(now.duration_since(previous).as_millis());
+            }
+            self.last_audio_wall = Some(now);
+            self.audio_buffers = self.audio_buffers.saturating_add(1);
+            self.audio_bytes = self
+                .audio_bytes
+                .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
+        }
+
+        fn log_av_health(&self, finalize_ok: bool) {
+            if self.suppress_av_log {
+                return;
+            }
+            let Some(format) = self.audio_format else {
+                return;
+            };
+
+            let bytes_per_second = u64::from(format.sample_rate)
+                .saturating_mul(u64::from(format.channels))
+                .saturating_mul(u64::from(format.bits_per_sample))
+                / 8;
+            let audio_duration_ms = if bytes_per_second > 0 {
+                self.audio_bytes.saturating_mul(1_000) / bytes_per_second
+            } else {
+                0
+            };
+            let video_duration_ms = match (
+                self.first_video_timestamp_hns,
+                self.last_video_timestamp_hns,
+            ) {
+                (Some(first), Some(last)) => {
+                    u64::try_from(last.saturating_sub(first).max(0)).unwrap_or(u64::MAX) / 10_000
+                }
+                _ => 0,
+            };
+            let media_drift_ms = i128::from(audio_duration_ms) - i128::from(video_duration_ms);
+            let startup_offset_ms = match (self.first_audio_wall, self.first_video_wall) {
+                (Some(audio), Some(video)) if audio >= video => {
+                    i128::try_from(audio.duration_since(video).as_millis()).unwrap_or(i128::MAX)
+                }
+                (Some(audio), Some(video)) => {
+                    -i128::try_from(video.duration_since(audio).as_millis()).unwrap_or(i128::MAX)
+                }
+                _ => 0,
+            };
+
+            eprintln!(
+                "[Recorder][AvHealth] finalize_ok={} audio_buffers={} audio_bytes={} audio_duration_ms={} video_duration_ms={} media_drift_ms={} startup_offset_ms={} max_audio_submit_gap_ms={} path={}",
+                finalize_ok,
+                self.audio_buffers,
+                self.audio_bytes,
+                audio_duration_ms,
+                video_duration_ms,
+                media_drift_ms,
+                startup_offset_ms,
+                self.max_audio_submit_gap_ms,
+                self.output_path.display(),
+            );
+
+            if video_duration_ms >= 2_000 && media_drift_ms.abs() > 250 {
+                eprintln!(
+                    "[Recorder][AvHealth] warning=large_media_drift drift_ms={} audio_ms={} video_ms={} path={}",
+                    media_drift_ms,
+                    audio_duration_ms,
+                    video_duration_ms,
+                    self.output_path.display(),
+                );
+            }
+            if self.max_audio_submit_gap_ms > 250 {
+                eprintln!(
+                    "[Recorder][AvHealth] warning=large_audio_submission_gap gap_ms={} path={}",
+                    self.max_audio_submit_gap_ms,
+                    self.output_path.display(),
+                );
+            }
         }
 
         pub fn send_frame(&mut self, frame: &Frame) -> Result<(), VideoEncoderError> {
+            let timestamp = frame.timestamp().ok().map(|value| value.Duration);
             let result = self.inner.send_frame(frame);
             if result.is_ok() {
+                self.record_video_success(timestamp);
                 diagnostics::record_camera_overlay_submission();
             }
             result
@@ -59,6 +259,7 @@ pub mod encoder {
         ) -> Result<(), VideoEncoderError> {
             let result = self.inner.send_frame_buffer(buffer, timestamp);
             if result.is_ok() {
+                self.record_video_success(Some(timestamp));
                 diagnostics::record_camera_overlay_submission();
             }
             result
@@ -69,13 +270,51 @@ pub mod encoder {
             buffer: &[u8],
             timestamp: i64,
         ) -> Result<(), VideoEncoderError> {
-            self.inner.send_audio_buffer(buffer, timestamp)
+            let result = self.inner.send_audio_buffer(buffer, timestamp);
+            if result.is_ok() {
+                self.record_audio_success(buffer.len());
+            }
+            result
         }
 
         pub fn finish(self) -> Result<(), VideoEncoderError> {
-            let result = self.inner.finish();
+            let Self {
+                inner,
+                output_path,
+                audio_format,
+                audio_bytes,
+                audio_buffers,
+                first_audio_wall,
+                last_audio_wall,
+                max_audio_submit_gap_ms,
+                first_video_wall,
+                first_video_timestamp_hns,
+                last_video_timestamp_hns,
+                suppress_av_log,
+            } = self;
+            let result = inner.finish();
+            let health = Self {
+                inner: unreachable_encoder(),
+                output_path,
+                audio_format,
+                audio_bytes,
+                audio_buffers,
+                first_audio_wall,
+                last_audio_wall,
+                max_audio_submit_gap_ms,
+                first_video_wall,
+                first_video_timestamp_hns,
+                last_video_timestamp_hns,
+                suppress_av_log,
+            };
+            health.log_av_health(result.is_ok());
+            std::mem::forget(health);
             diagnostics::finish_camera_segment(result.is_ok());
             result
         }
+    }
+
+    fn unreachable_encoder() -> crate::implementation::encoder::VideoEncoder {
+        panic!("A/V health logging must not access a finalized encoder")
     }
 }
