@@ -11,16 +11,13 @@ mod capture;
 mod commands;
 mod encoding;
 mod recording;
+mod security;
 mod state;
 
 use state::AppState;
 
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_opener::init())
         .setup(|_| {
             // Media Foundation normally pays a large one-time codec startup cost on
             // the first recording. Exercise the native H.264/AAC path in a background
