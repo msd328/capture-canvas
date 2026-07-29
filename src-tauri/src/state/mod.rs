@@ -27,7 +27,7 @@ impl LibraryStore {
         let mut recordings: Vec<RecordingOutput> = load_json(&path).unwrap_or_default();
         // Persisted metadata is untrusted. Keep only non-empty UUID-named MP4 files
         // that canonicalise to a direct child of the approved Recordings directory.
-        recordings.retain(|recording| {
+        recordings.retain_mut(|recording| {
             match security::validate_existing_recording_path(
                 &recording.id,
                 &recording.file_path,
