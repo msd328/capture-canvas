@@ -211,6 +211,7 @@ impl CameraFrameCapture {
             }
         }
 
+        windows_capture::diagnostics::mark_camera_source_stopped();
         if let Some(error) = self.error_state.lock().take() {
             return Err(anyhow::anyhow!(error));
         }
@@ -377,14 +378,19 @@ fn start_native_camera_frame_capture(
                 return Ok(());
             }
             let Some(reader) = sender.as_ref() else {
+                windows_capture::diagnostics::record_camera_acquire_miss();
                 return Ok(());
             };
             match copy_native_camera_frame(reader) {
                 Ok(Some(frame)) => {
+                    windows_capture::diagnostics::record_camera_received();
                     *latest_frame.lock() = Some(frame);
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    windows_capture::diagnostics::record_camera_acquire_miss();
+                }
                 Err(error) => {
+                    windows_capture::diagnostics::record_camera_source_error();
                     let mut state = callback_errors.lock();
                     if state.is_none() {
                         *state = Some(error.to_string());
@@ -412,6 +418,7 @@ fn start_native_camera_frame_capture(
         ));
     }
 
+    windows_capture::diagnostics::start_camera_segment("native-mediacapture");
     eprintln!(
         "[Recorder] Native Windows MediaCapture webcam source active ({}x{} BGRA8)",
         OVERLAY_WIDTH, OVERLAY_HEIGHT
@@ -489,15 +496,17 @@ fn start_ffmpeg_camera_frame_capture(
         while !reader_stop.load(Ordering::Acquire) {
             match stdout.read_exact(&mut frame) {
                 Ok(()) => {
+                    windows_capture::diagnostics::record_camera_received();
                     *latest_frame.lock() = Some(frame.clone());
                 }
                 Err(error) => {
-                    if !reader_stop.load(Ordering::Acquire)
-                        && error.kind() != std::io::ErrorKind::UnexpectedEof
-                    {
-                        *reader_errors.lock() = Some(format!(
-                            "Camera frame source stopped while reading frames: {error}"
-                        ));
+                    if !reader_stop.load(Ordering::Acquire) {
+                        windows_capture::diagnostics::record_camera_source_error();
+                        if error.kind() != std::io::ErrorKind::UnexpectedEof {
+                            *reader_errors.lock() = Some(format!(
+                                "Camera frame source stopped while reading frames: {error}"
+                            ));
+                        }
                     }
                     break;
                 }
@@ -521,6 +530,7 @@ fn start_ffmpeg_camera_frame_capture(
         ));
     }
 
+    windows_capture::diagnostics::start_camera_segment("ffmpeg-dshow");
     eprintln!("[Recorder] FFmpeg webcam compatibility source active");
     Ok(CameraFrameCapture {
         backend: CameraFrameBackend::Ffmpeg {
