@@ -14,10 +14,14 @@ fn worker_error(operation: &str, error: impl std::fmt::Display) -> String {
 
 #[tauri::command]
 pub async fn start_recording(
-    config: RecordingConfig,
+    mut config: RecordingConfig,
     state: State<'_, AppState>,
 ) -> Result<StartResponse, String> {
     security::validate_start_config(&config)?;
+    if let Some(title) = config.title.take() {
+        config.title = Some(security::validate_title(&title)?);
+    }
+
     let engine = state.engine.clone();
     let result = tauri::async_runtime::spawn_blocking(move || engine.start(config))
         .await
