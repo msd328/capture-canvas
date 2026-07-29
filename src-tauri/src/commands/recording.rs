@@ -74,6 +74,8 @@ pub async fn start_recording(
 #[tauri::command]
 pub async fn pause_recording(state: State<'_, AppState>) -> Result<(), String> {
     let command_started = Instant::now();
+    #[cfg(windows)]
+    windows_capture::mark_recording_stop_requested();
     let engine = state.engine.clone();
     let engine_started = Instant::now();
     let worker_result = tauri::async_runtime::spawn_blocking(move || engine.pause()).await;
@@ -136,6 +138,8 @@ pub async fn resume_recording(state: State<'_, AppState>) -> Result<(), String> 
 #[tauri::command]
 pub async fn stop_recording(state: State<'_, AppState>) -> Result<RecordingOutput, String> {
     let command_started = Instant::now();
+    #[cfg(windows)]
+    windows_capture::mark_recording_stop_requested();
     let engine = state.engine.clone();
     let engine_started = Instant::now();
     let worker_result = tauri::async_runtime::spawn_blocking(move || engine.stop()).await;
