@@ -1,6 +1,5 @@
-use crate::{recording::types::*, state::AppState};
+use crate::{recording::types::*, security, state::AppState};
 use std::fs;
-use std::path::PathBuf;
 use std::process::Command;
 use tauri::State;
 
@@ -11,32 +10,38 @@ pub fn get_recordings(state: State<'_, AppState>) -> Vec<RecordingOutput> {
 
 #[tauri::command]
 pub fn get_recording(id: String, state: State<'_, AppState>) -> Option<RecordingOutput> {
+    if security::validate_recording_id(&id).is_err() {
+        return None;
+    }
     state
         .library
         .recordings
         .read()
         .iter()
-        .find(|r| r.id == id)
+        .find(|recording| recording.id == id)
         .cloned()
 }
 
 #[tauri::command]
 pub fn delete_recording(id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let path = state
+    security::validate_recording_id(&id)?;
+    let raw_path = state
         .library
         .recordings
         .read()
         .iter()
-        .find(|r| r.id == id)
-        .map(|r| PathBuf::from(&r.file_path));
+        .find(|recording| recording.id == id)
+        .map(|recording| recording.file_path.clone())
+        .ok_or_else(|| "Recording not found".to_string())?;
+    let path = security::validate_existing_recording_path(&id, &raw_path)?;
 
-    if let Some(path) = path {
-        if path.exists() {
-            fs::remove_file(&path)
-                .map_err(|e| format!("Unable to delete {}: {e}", path.display()))?;
-        }
-    }
-    state.library.recordings.write().retain(|r| r.id != id);
+    fs::remove_file(&path)
+        .map_err(|error| format!("Unable to delete approved recording file: {error}"))?;
+    state
+        .library
+        .recordings
+        .write()
+        .retain(|recording| recording.id != id);
     state.library.persist()?;
     Ok(())
 }
@@ -47,14 +52,17 @@ pub fn rename_recording(
     title: String,
     state: State<'_, AppState>,
 ) -> Result<RecordingOutput, String> {
+    security::validate_recording_id(&id)?;
+    let title = security::validate_title(&title)?;
     let updated = {
         let mut guard = state.library.recordings.write();
-        let rec = guard
+        let recording = guard
             .iter_mut()
-            .find(|r| r.id == id)
+            .find(|recording| recording.id == id)
             .ok_or_else(|| "Recording not found".to_string())?;
-        rec.title = title;
-        rec.clone()
+        security::validate_existing_recording_path(&recording.id, &recording.file_path)?;
+        recording.title = title;
+        recording.clone()
     };
     state.library.persist()?;
     Ok(updated)
@@ -62,21 +70,23 @@ pub fn rename_recording(
 
 #[tauri::command]
 pub fn open_recording_location(id: String, state: State<'_, AppState>) -> Result<(), String> {
-    let path = state
+    security::validate_recording_id(&id)?;
+    let raw_path = state
         .library
         .recordings
         .read()
         .iter()
-        .find(|r| r.id == id)
-        .map(|r| PathBuf::from(&r.file_path))
+        .find(|recording| recording.id == id)
+        .map(|recording| recording.file_path.clone())
         .ok_or_else(|| "Recording not found".to_string())?;
+    let path = security::validate_existing_recording_path(&id, &raw_path)?;
 
     #[cfg(windows)]
     {
         Command::new("explorer.exe")
             .arg(format!("/select,{}", path.display()))
             .spawn()
-            .map_err(|e| format!("Unable to open File Explorer: {e}"))?;
+            .map_err(|error| format!("Unable to open File Explorer: {error}"))?;
         return Ok(());
     }
 
