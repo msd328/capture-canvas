@@ -22,11 +22,11 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Rebuild after correcting the `windows 0.61` async-status binding to the matching direct `windows-future 0.2` dependency.
-2. Repeat Pause/Resume and confirm normal `FinalizerHealth` output plus successful candidate publication.
-3. Confirm the 20-second render deadline, cancellation request, two-second settle grace, and deferred-cleanup fields compile without affecting normal finalisation.
+1. Rebuild the latest branch and confirm one path-free `CleanupHealth` startup line.
+2. Run the stale/recent/final-file cleanup matrix and validate that only 24-hour-old recorder-owned temporary files are deleted.
+3. Repeat Pause/Resume and confirm normal `FinalizerHealth` output plus successful candidate publication.
 4. Run one single-segment recording and capture `ThumbnailHealth` to identify the native thumbnail failure stage or confirm success.
-5. Add startup cleanup for stale hidden native-finalizer candidates and then evaluate safe bounds for WinRT open/decode and FFmpeg fallback phases.
+5. Evaluate safe bounds for WinRT open/decode and FFmpeg fallback phases after cleanup validation.
 6. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
 7. Run the 60-second mostly-static full-source and selected-area duration matrix.
 8. Validate camera, submitted A/V drift, and audio-mixer health with camera + microphone + system audio.
@@ -152,6 +152,7 @@ Every implementation update must also include the security-impact block defined 
 | HLT-19 | 🟡 | Native finalizer stage, retry, HRESULT and render-reason diagnostics | `FinalizerHealth` implemented for destination/segment metadata, open, decode, append and render stages; Windows Pause/Resume rerun pending |
 | HLT-20 | 🟡 | Native thumbnail failure-stage and retry diagnostics | `ThumbnailHealth` implemented for WinRT open/request/read stages and asynchronous backfill; Windows single-segment and fallback-output reruns pending |
 | HLT-21 | 🟡 | Native render timeout, cancellation and isolated-candidate outcome | Timeout diagnostics remain implemented; first build stopped at E0432 before runtime, and the matching `windows-future::AsyncStatus` binding is now used; compile/runtime validation pending |
+| HLT-22 | 🟡 | Startup orphan-cleanup summary and safety counters | `CleanupHealth` reports bounded scan, exact matches, removals, recent/rejected entries, failures and age policy; Windows negative test pending |
 
 ## Recording library
 
@@ -184,7 +185,7 @@ Every implementation update must also include the security-impact block defined 
 | REL-07 | 🔵 | Window close/minimise handling | Clear error/finalised output |
 | REL-08 | 🔵 | Camera/microphone disconnect handling | No hang/corruption |
 | REL-09 | 🔵 | Low-disk-space check | Refuse safely before/during capture |
-| REL-10 | 🔵 | Orphaned segment/candidate cleanup | Stale part files and hidden native-finalizer candidates removed or recovered |
+| REL-10 | 🟡 | Orphaned segment/candidate cleanup | Background startup scan removes only exact UUID-named part/mixed/system/native-finalizer files older than 24 hours; Windows stale/recent/final-file matrix pending |
 | REL-11 | 🔵 | Crash-recovery metadata | Active session journal |
 | REL-12 | ⚪ | Recover playable output after crash | Recovery workflow |
 | REL-13 | ⚪ | Diagnostic log rotation | Bounded log storage |
@@ -220,119 +221,3 @@ Every implementation update must also include the security-impact block defined 
 | FFM-06 | 🔵 | Replace emergency segment-concat fallback |
 | FFM-07 | 🔵 | Remove external-system-audio compatibility path |
 | FFM-08 | 🔵 | Remove FFmpeg discovery/sidecar logic |
-| FFM-09 | 🔵 | Remove FFmpeg from production packaging |
-
-## Distribution
-
-| ID | Status | Work |
-|---|---:|---|
-| DIST-01 | ⚪ | Production Tauri build configuration |
-| DIST-02 | ⚪ | Windows installer |
-| DIST-03 | ⚪ | Code-signing certificate |
-| DIST-04 | ⚪ | Signed executable and installer |
-| DIST-05 | ⚪ | Automatic updater |
-| DIST-06 | ⚪ | Stable/beta release channels |
-| DIST-07 | ⚪ | Consent-based crash reporting |
-| DIST-08 | ⚪ | Privacy policy and licence notices |
-| DIST-09 | ⚪ | Exact dependency/licence audit |
-| DIST-10 | ⚪ | Clean-machine installation test |
-
-## Security and privacy
-
-The detailed policy, trust boundaries, current data inventory, and mandatory status-update template are in `docs/SECURITY_BASELINE.md`.
-
-| ID | Status | Work | Acceptance evidence |
-|---|---:|---|---|
-| SEC-01 | 🟡 | Threat model, data inventory, trust boundaries, and security review policy | Baseline document committed; architecture review and future data-flow updates pending |
-| SEC-02 | 🟡 | Strict production Content Security Policy | Production/dev CSP and security headers configured; Windows dev app starts; packaged UI validation remains |
-| SEC-03 | 🟡 | Replace wildcard asset-protocol scope with recording-only access | Scope limited to `$HOME/Recordings/*.mp4`; playback and arbitrary-file rejection tests pending |
-| SEC-04 | 🟡 | Canonical recording-path allowlist for create/delete/open/thumbnail/upload | UUID/filename/root/regular-file checks implemented for current local operations; negative and filesystem-race tests pending |
-| SEC-05 | 🟡 | Minimal Tauri capabilities and plugin set | Main-window core-only capability and plugin removal compile/run in Windows dev; packaged/runtime permission tests remain |
-| SEC-06 | 🟡 | Comprehensive Rust command-input validation and limits | UUID, title, FPS, device ID, output-path and settings validation added; dimensions/crops/source IDs/negative test suite remain |
-| SEC-07 | 🔵 | Remove or authenticate external executable discovery | Production never executes an unverified PATH/environment-selected FFmpeg binary |
-| SEC-08 | 🟡 | Structured diagnostic-log privacy and redaction | Structured recorder health uses roles, indexes, stages and HRESULTs instead of local paths; free-form backend errors and future exported reports still require review |
-| SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot configuration committed; first successful update/alert cycle pending |
-| SEC-10 | 🔵 | Secret scanning and repository protection | Secret scanning enabled; test secret is blocked or detected without entering history |
-| SEC-11 | ⚪ | Signed executable, installer, updater, and update metadata | Signature verification passes on a clean machine |
-| SEC-12 | ⚪ | OS secure storage for future account tokens | Tokens use Windows Credential Manager/macOS Keychain and never JSON/localStorage/logs |
-| SEC-13 | ⚪ | SaaS authentication, object authorisation, tenancy, and rate-limit tests | Cross-user/cross-workspace access attempts are rejected server-side |
-| SEC-14 | ⚪ | Optional encrypted local recording storage | Keys are protected by the OS and recovery/deletion behaviour is documented |
-| SEC-15 | ⚪ | Independent penetration test and remediation verification | High/critical findings resolved before public release |
-
-## SaaS and sharing
-
-SaaS work starts after the desktop recorder passes the reliability and critical-security gates.
-
-| ID | Status | Work |
-|---|---:|---|
-| SAAS-01 | ⚪ | Authentication |
-| SAAS-02 | ⚪ | Secure desktop token storage |
-| SAAS-03 | ⚪ | Resumable uploads |
-| SAAS-04 | ⚪ | Upload progress/retry |
-| SAAS-05 | ⚪ | Shareable links |
-| SAAS-06 | ⚪ | Public/private/link-only permissions |
-| SAAS-07 | ⚪ | Cloud video processing/streaming |
-| SAAS-08 | ⚪ | Cloud thumbnails and metadata |
-| SAAS-09 | ⚪ | Comments and reactions |
-| SAAS-10 | ⚪ | Team workspaces |
-| SAAS-11 | ⚪ | Usage limits |
-| SAAS-12 | ⚪ | Subscription billing |
-| SAAS-13 | ⚪ | Storage quotas |
-| SAAS-14 | ⚪ | Retention/deletion policy |
-| SAAS-15 | ⚪ | Administration and abuse tools |
-
----
-
-## Production-readiness gate
-
-The desktop recorder is not production-ready until all of the following pass:
-
-- Full display, full window, and selected-area recording.
-- Camera + microphone + system audio together.
-- Pause/Resume with correct duration and no visible quality loss.
-- 30 FPS and 60 FPS output.
-- At least one one-hour recording.
-- Static-screen duration continuity.
-- No noticeable audio/video drift.
-- Warm Start, Pause, Resume, and Stop meet latency targets.
-- No production FFmpeg dependency.
-- Crash-safe temporary files and recovery behaviour.
-- SEC-02 through SEC-10 completed and validated.
-- Signed installer and updater path tested on a clean Windows machine.
-- Privacy policy, data inventory, dependency/licence report, and incident-response contact completed.
-
-## Target control latency
-
-| Operation | Target |
-|---|---:|
-| Warm Start | under 1 second |
-| Pause | under 1 second |
-| Resume | under 1 second |
-| Single-segment Stop | under 2 seconds |
-
-## Change log
-
-| Date | Commit | Roadmap update |
-|---|---|---|
-| 2026-07-28 | `c688bc7` baseline | Added formal tracking after encoder submission instrumentation |
-| 2026-07-28 | `02f950e` | Added repository roadmap and validation policy |
-| 2026-07-28 | `d0b4708` | Added expected-frame timeline coverage and deficit diagnostics; HLT-16 → 🟡 |
-| 2026-07-28 | `4c18cde` | First namespace repair after E0433 build failure; second Windows build exposed root `capture` collision |
-| 2026-07-28 | `840efeb..fcc6b10` | Replaced the conflicting crate-root alias with a local external `windows_capture` facade crate; VID-08 and HLT-05–08/16 remain 🟡 pending rebuild |
-| 2026-07-28 | `e949aba..b52ae4a` | Added central WGC delivery, FPS-limiter, capture-gap and processing-deficit counters; VID-09 and HLT-09/10 → 🟡 |
-| 2026-07-28 | `885ba57..7f051ed` | Fixed E0597 callback guard lifetime through the Rust 2024 facade entry wrapper; validation remained pending |
-| 2026-07-29 | `942e99c` | Replaced `include!` with a normal module path after E0753 inner-documentation errors; facade validation remains pending |
-| 2026-07-29 | `41cddbf..7f93bbc` | Added the security baseline and weekly npm/Cargo dependency monitoring; SEC-01 and SEC-09 → 🟡 |
-| 2026-07-29 | `a96773e..16a6595` | Added canonical UUID/file/root guards, command validation, settings normalisation, startup metadata filtering, and protected thumbnail/open/delete paths; SEC-04/06 → 🟡 |
-| 2026-07-29 | `86c3a8b..15093a5` | Added main-window capability, removed unused Tauri plugins, enabled strict CSP, and restricted the asset protocol; SEC-02/03/05 → 🟡 |
-| 2026-07-29 | `eaa5edc` | Updated the security baseline with implemented controls, validation requirements, and remaining risks |
-| 2026-07-29 | `857c123..7c0ae5e` | Added shared native/fallback camera source counters and encoder-correlated overlay submissions; CAM-07 and HLT-11 → 🟡 |
-| 2026-07-29 | `9a95245..9adc100` | Added submitted PCM/video timeline duration, startup-offset and audio-submission-gap diagnostics; AUD-10 and HLT-13 → 🟡 |
-| 2026-07-29 | `8a8990e..d8496d8` | Added per-source mixer underrun, queue-drop and peak-depth diagnostics for both Windows capture backends; AUD-08, AUD-09 and HLT-12 → 🟡 |
-| 2026-07-29 | `78e758f` | Added command/engine boundary timings and failure-stage diagnostics; CTRL-10, CTRL-11 and HLT-17 → 🟡 |
-| 2026-07-29 | `1b3026b..a7ffa55` | Added a final static-tail hold anchored to the user Pause/Stop request; VID-10, REL-03 and HLT-18 → 🟡 |
-| 2026-07-30 | `cb94dd5..af4994b` | Reinterpreted timeline health from timestamp span, retained sample density separately, and removed local paths from structured capture/A-V health output; HLT-16 and SEC-08 remain 🟡 pending Windows validation |
-| 2026-07-30 | `17435c8..ca871a3` | Windows build/runtime validated encoder/WGC/control diagnostics; fixed WinRT extended-path handling for native concat/thumbnails and removed redaction-related warnings |
-| 2026-07-30 | `6090651..9520869` | Added path-free native MediaComposition stage/HRESULT diagnostics and typed thumbnail failure-stage reporting; HLT-19 and HLT-20 → 🟡 |
-| 2026-07-30 | `fcbdecb..614e176` | Added isolated candidate rendering, a 20-second MediaComposition render deadline, cancellation request, two-second settle grace and deferred-cleanup reporting; CTRL-13 and HLT-21 → 🟡 |
-| 2026-07-30 | `2227351..a3a7c23` | Windows build exposed E0432 for `windows::Foundation::AsyncStatus`; added direct `windows-future 0.2` and corrected the import; CTRL-13 and HLT-21 remain 🟡 pending rebuild |
