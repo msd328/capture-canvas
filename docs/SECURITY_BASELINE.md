@@ -82,6 +82,7 @@ The following controls were implemented on 2026-07-29 and 2026-07-30 and remain 
 - `ThumbnailHealth` reports only recording UUID, stage, retry attempt, elapsed time, generated/failed totals and HRESULT/status identifiers.
 - Native MediaComposition renders into a hidden unique candidate rather than the final recording path, preventing a timed-out WinRT operation and FFmpeg fallback from writing the same destination concurrently.
 - Native rendering uses a fixed 20-second deadline and two-second cancellation-settle grace; an unsettled candidate is not deleted while Windows may still own it.
+- Startup cleanup scans only direct children of the approved Recordings root, recognises exact canonical UUID-based part/mixed/system/native-finalizer names, rejects links/non-regular files, applies a 24-hour age gate, limits each scan to 4,096 entries, and emits path-free aggregate `CleanupHealth` output.
 
 ## Required security impact block for every implementation batch
 
@@ -114,7 +115,7 @@ Use `None` explicitly rather than omitting a field.
 - FFmpeg compatibility discovery can use an environment override or PATH lookup.
 - Structured recorder health lines are path-redacted, but free-form backend errors, future crash reports, support bundles, and exported diagnostics still require a complete privacy review.
 - Finalizer and thumbnail HRESULT/stage logs require Windows runtime review to ensure platform-provided identifiers never contain unexpected user-controlled text.
-- A cancellation that remains unsettled after the two-second grace can leave a hidden MP4 candidate containing captured content until startup orphan cleanup is implemented.
+- Startup orphan cleanup is implemented but still requires a Windows stale/recent/final-file negative test. It intentionally retains matching files younger than 24 hours and remains subject to same-user filesystem races between metadata inspection and deletion.
 - The MediaComposition render phase is bounded, but WinRT file-open/clip-decode waits and FFmpeg fallback execution are not yet hard-bounded.
 - Dependency vulnerability alerts, secret scanning, signing, updater verification, and penetration testing are not yet complete.
 
@@ -328,10 +329,55 @@ Security tests completed:
 Static control-flow, destination-isolation, cleanup and structured-log review only.
 
 Remaining risks:
-Windows compilation/runtime validation is pending. An unsettled cancellation can leave a
-hidden candidate containing captured content. Startup orphan cleanup is not implemented.
-WinRT open/decode waits and FFmpeg fallback are not yet hard-bounded. Recordings remain
-unencrypted at rest.
+Windows compilation/runtime validation remains required. An unsettled cancellation can leave
+a hidden candidate containing captured content until the background startup cleanup reaches
+the 24-hour age threshold. WinRT open/decode waits and FFmpeg fallback are not yet hard-bounded.
+Recordings remain unencrypted at rest.
+```
+
+## Batch security record — 2026-07-30 stale artifact cleanup
+
+```text
+Security impact:
+Added conservative deletion of stale recorder-owned temporary media under the approved
+Recordings root.
+
+Data accessed:
+Direct-child filenames, file type, modification time and deletion results for entries in
+the approved Recordings directory.
+
+Data written:
+No new persistent application data. Exact matching temporary files older than 24 hours
+may be deleted. Path-free CleanupHealth diagnostics and repository documentation are written.
+
+Network communication added:
+None.
+
+New permissions/capabilities:
+None.
+
+External processes:
+None.
+
+Untrusted inputs:
+Local directory entries, filenames, file metadata and timestamps.
+
+Validation added:
+Canonical lowercase UUID parsing, exact suffix parsing, regular-file/link rejection,
+24-hour minimum age, 4,096-entry scan bound, final-recording exclusion, path-free aggregate
+diagnostics and filename-parser unit tests.
+
+Secrets involved:
+None.
+
+Security tests completed:
+Static name-pattern, path-boundary, age-gate, link-rejection and logging review. Windows
+filesystem negative testing remains pending.
+
+Remaining risks:
+A same-user process can race an entry between metadata inspection and deletion. Cleanup
+does not recover playable segments or remove matching files younger than 24 hours.
+Recordings remain unencrypted at rest.
 ```
 
 ## Vulnerability handling
