@@ -10,6 +10,12 @@ mod camera;
 mod capture;
 mod commands;
 mod encoding;
+// The bounded WinRT wait macro assigns its timeout flag before returning an
+// explicit timeout outcome. Rust reports that macro-local assignment once per
+// expansion even though the outcome carries the correct timeout state. Keep the
+// expectation scoped to recording code so unrelated unused assignments remain
+// visible, and remove it when the macro is converted to a typed helper.
+#[cfg_attr(windows, expect(unused_assignments))]
 mod recording;
 mod security;
 mod state;
