@@ -40,6 +40,10 @@ windows = { version = "0.61", features = [
     "Win32_UI_HiDpi",
     "Win32_UI_WindowsAndMessaging",
 ] }
+# windows 0.61 projects WinRT async support through its matching companion crate.
+# Keep this direct dependency so the bounded finalizer can name AsyncStatus without
+# relying on a transitive dependency or a version-mismatched generated namespace.
+windows-future = "0.2"
 # windows-capture 2.0 uses windows 0.62.2 internally. Keep an explicit alias to
 # that exact package for D3D11 resource types that cross the windows-capture
 # Frame boundary; the app's existing Win32 enumeration code can remain on 0.61.
