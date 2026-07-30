@@ -22,7 +22,7 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Rebuild after the bounded native-render and isolated-candidate changes.
+1. Rebuild after correcting the `windows 0.61` async-status binding to the matching direct `windows-future 0.2` dependency.
 2. Repeat Pause/Resume and confirm normal `FinalizerHealth` output plus successful candidate publication.
 3. Confirm the 20-second render deadline, cancellation request, two-second settle grace, and deferred-cleanup fields compile without affecting normal finalisation.
 4. Run one single-segment recording and capture `ThumbnailHealth` to identify the native thumbnail failure stage or confirm success.
@@ -124,7 +124,7 @@ Every implementation update must also include the security-impact block defined 
 | CTRL-10 | 🟡 | Start-stage timing breakdown | Runtime emitted Start/Resume engine totals around 1.29/1.33 seconds; internal resolve/device/audio/camera/encoder split and target improvement remain |
 | CTRL-11 | 🟡 | Stop-stage timing breakdown | Native MediaComposition emits open/decode/append/render/timeout/cancel/publish timings; FFmpeg fallback phase timing remains to be separated |
 | CTRL-12 | 🔵 | Pause/Resume without re-encoding | Timestamp rebasing/direct remux |
-| CTRL-13 | 🟡 | Bounded native finalisation timeout | MediaComposition render is polled for 20 seconds, cancellation is requested, and terminal settling is bounded to two seconds using an isolated candidate; Windows validation and bounds for open/decode/fallback remain |
+| CTRL-13 | 🟡 | Bounded native finalisation timeout | MediaComposition render is polled for 20 seconds with two-second cancellation settling through an isolated candidate; first Windows compile found an `AsyncStatus` namespace mismatch, corrected through direct `windows-future 0.2`; rebuild and open/decode/fallback bounds remain |
 | CTRL-14 | ⚪ | Cancel while Starting | Safe cancellation |
 
 ## Health diagnostics
@@ -151,7 +151,7 @@ Every implementation update must also include the security-impact block defined 
 | HLT-18 | 🟡 | Static-tail continuity and held-frame outcome | Runtime emitted valid continuity fields and snapshots for both segments; final tails were active so `hold_needed=false`; static hold validation remains |
 | HLT-19 | 🟡 | Native finalizer stage, retry, HRESULT and render-reason diagnostics | `FinalizerHealth` implemented for destination/segment metadata, open, decode, append and render stages; Windows Pause/Resume rerun pending |
 | HLT-20 | 🟡 | Native thumbnail failure-stage and retry diagnostics | `ThumbnailHealth` implemented for WinRT open/request/read stages and asynchronous backfill; Windows single-segment and fallback-output reruns pending |
-| HLT-21 | 🟡 | Native render timeout, cancellation and isolated-candidate outcome | `FinalizerHealth` reports configured deadline, timeout, cancel request, terminal settle status, candidate publication and deferred cleanup; Windows compile/runtime validation pending |
+| HLT-21 | 🟡 | Native render timeout, cancellation and isolated-candidate outcome | Timeout diagnostics remain implemented; first build stopped at E0432 before runtime, and the matching `windows-future::AsyncStatus` binding is now used; compile/runtime validation pending |
 
 ## Recording library
 
@@ -335,3 +335,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-30 | `17435c8..ca871a3` | Windows build/runtime validated encoder/WGC/control diagnostics; fixed WinRT extended-path handling for native concat/thumbnails and removed redaction-related warnings |
 | 2026-07-30 | `6090651..9520869` | Added path-free native MediaComposition stage/HRESULT diagnostics and typed thumbnail failure-stage reporting; HLT-19 and HLT-20 → 🟡 |
 | 2026-07-30 | `fcbdecb..614e176` | Added isolated candidate rendering, a 20-second MediaComposition render deadline, cancellation request, two-second settle grace and deferred-cleanup reporting; CTRL-13 and HLT-21 → 🟡 |
+| 2026-07-30 | `2227351..a3a7c23` | Windows build exposed E0432 for `windows::Foundation::AsyncStatus`; added direct `windows-future 0.2` and corrected the import; CTRL-13 and HLT-21 remain 🟡 pending rebuild |
