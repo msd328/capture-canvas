@@ -26,6 +26,9 @@ macro_rules! eprintln {
         $audio_bytes:expr,
         $path:expr $(,)?
     ) => {{
+        // Evaluate the path expression so the internally retained path remains an
+        // intentional field, while never serializing it into diagnostic output.
+        let _ = &$path;
         let active_wall_ms = $active_wall_ms;
         let frames_submitted = $frames_submitted;
         let effective_fps = $effective_fps;
@@ -159,7 +162,9 @@ macro_rules! eprintln {
         $startup_offset_ms:expr,
         $max_audio_submit_gap_ms:expr,
         $path:expr $(,)?
-    ) => {
+    ) => {{
+        // Retain the path internally for warm-up classification, but never log it.
+        let _ = &$path;
         ::std::eprintln!(
             "[Recorder][AvHealth] finalize_ok={} audio_buffers={} audio_bytes={} audio_duration_ms={} video_duration_ms={} media_drift_ms={} startup_offset_ms={} max_audio_submit_gap_ms={}",
             $finalize_ok,
@@ -171,7 +176,7 @@ macro_rules! eprintln {
             $startup_offset_ms,
             $max_audio_submit_gap_ms,
         )
-    };
+    }};
     (
         "[Recorder][AvHealth] warning=large_media_drift drift_ms={} audio_ms={} video_ms={} path={}",
         $drift_ms:expr,
