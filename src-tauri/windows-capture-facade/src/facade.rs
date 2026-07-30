@@ -1,3 +1,206 @@
+// Intercept the legacy diagnostics emitted by the implementation module before it
+// is loaded. The capture/encoder behaviour is unchanged: this shim only renames the
+// old frame-count percentage to sample density, derives real timestamp-span coverage,
+// suppresses the obsolete density-based warning, and removes local paths from logs.
+macro_rules! eprintln {
+    (
+        "[Recorder][StreamHealth] finalize_ok={} wall_ms={} active_wall_ms={} target_fps={} frames_received={} frames_rate_limited={} frames_submitted={} expected_frames={} frame_deficit={} timeline_coverage_pct={:.1} processing_deficit={} frame_failures={} capture_fps={:.2} effective_fps={:.2} max_capture_gap_ms={:.1} max_frame_gap_ms={:.1} audio_buffers={} audio_failures={} audio_bytes={} path={}",
+        $finalize_ok:expr,
+        $wall_ms:expr,
+        $active_wall_ms:expr,
+        $target_fps:expr,
+        $frames_received:expr,
+        $frames_rate_limited:expr,
+        $frames_submitted:expr,
+        $expected_frames:expr,
+        $frame_deficit:expr,
+        $sample_density_pct:expr,
+        $processing_deficit:expr,
+        $frame_failures:expr,
+        $capture_fps:expr,
+        $effective_fps:expr,
+        $max_capture_gap_ms:expr,
+        $max_frame_gap_ms:expr,
+        $audio_buffers:expr,
+        $audio_failures:expr,
+        $audio_bytes:expr,
+        $path:expr $(,)?
+    ) => {{
+        let active_wall_ms = $active_wall_ms;
+        let frames_submitted = $frames_submitted;
+        let effective_fps = $effective_fps;
+        let timeline_span_ms = if frames_submitted > 1
+            && effective_fps.is_finite()
+            && effective_fps > 0.0
+        {
+            ((((frames_submitted - 1) as f64 / effective_fps) * 1_000.0).round()) as u128
+        } else {
+            0
+        };
+        let timeline_coverage_pct = if active_wall_ms > 0 {
+            ((timeline_span_ms as f64 * 100.0) / active_wall_ms as f64).min(100.0)
+        } else if frames_submitted > 0 {
+            100.0
+        } else {
+            0.0
+        };
+
+        ::std::eprintln!(
+            "[Recorder][StreamHealth] finalize_ok={} wall_ms={} active_wall_ms={} timeline_span_ms={} timeline_coverage_pct={:.1} target_fps={} frames_received={} frames_rate_limited={} frames_submitted={} expected_frames={} frame_deficit={} sample_density_pct={:.1} processing_deficit={} frame_failures={} capture_fps={:.2} effective_fps={:.2} max_capture_gap_ms={:.1} max_frame_gap_ms={:.1} audio_buffers={} audio_failures={} audio_bytes={}",
+            $finalize_ok,
+            $wall_ms,
+            active_wall_ms,
+            timeline_span_ms,
+            timeline_coverage_pct,
+            $target_fps,
+            $frames_received,
+            $frames_rate_limited,
+            frames_submitted,
+            $expected_frames,
+            $frame_deficit,
+            $sample_density_pct,
+            $processing_deficit,
+            $frame_failures,
+            $capture_fps,
+            effective_fps,
+            $max_capture_gap_ms,
+            $max_frame_gap_ms,
+            $audio_buffers,
+            $audio_failures,
+            $audio_bytes,
+        );
+
+        if active_wall_ms >= 2_000 && timeline_coverage_pct < 90.0 {
+            ::std::eprintln!(
+                "[Recorder][StreamHealth] warning=low_timeline_coverage active_wall_ms={} timeline_span_ms={} coverage_pct={:.1}",
+                active_wall_ms,
+                timeline_span_ms,
+                timeline_coverage_pct,
+            );
+        }
+    }};
+    (
+        "[Recorder][StreamHealth] warning=no_wgc_frames_received path={}",
+        $path:expr $(,)?
+    ) => {
+        ::std::eprintln!("[Recorder][StreamHealth] warning=no_wgc_frames_received")
+    };
+    (
+        "[Recorder][StreamHealth] warning=no_video_frames_submitted path={}",
+        $path:expr $(,)?
+    ) => {
+        ::std::eprintln!("[Recorder][StreamHealth] warning=no_video_frames_submitted")
+    };
+    (
+        "[Recorder][StreamHealth] warning=large_capture_gap gap_ms={:.1} path={}",
+        $gap_ms:expr,
+        $path:expr $(,)?
+    ) => {
+        ::std::eprintln!(
+            "[Recorder][StreamHealth] warning=large_capture_gap gap_ms={:.1}",
+            $gap_ms,
+        )
+    };
+    (
+        "[Recorder][StreamHealth] warning=large_video_gap gap_ms={:.1} path={}",
+        $gap_ms:expr,
+        $path:expr $(,)?
+    ) => {
+        ::std::eprintln!(
+            "[Recorder][StreamHealth] warning=large_video_gap gap_ms={:.1}",
+            $gap_ms,
+        )
+    };
+    (
+        "[Recorder][StreamHealth] warning=capture_processing_deficit expected_attempts={} actual_attempts={} deficit={} path={}",
+        $expected_attempts:expr,
+        $actual_attempts:expr,
+        $deficit:expr,
+        $path:expr $(,)?
+    ) => {
+        ::std::eprintln!(
+            "[Recorder][StreamHealth] warning=capture_processing_deficit expected_attempts={} actual_attempts={} deficit={}",
+            $expected_attempts,
+            $actual_attempts,
+            $deficit,
+        )
+    };
+    (
+        "[Recorder][StreamHealth] warning=low_timeline_coverage expected={} submitted={} deficit={} coverage_pct={:.1} path={}",
+        $expected:expr,
+        $submitted:expr,
+        $deficit:expr,
+        $coverage_pct:expr,
+        $path:expr $(,)?
+    ) => {{
+        // The main StreamHealth arm emits the timestamp-span warning. The legacy
+        // warning measured constant-frame sample density and is intentionally muted.
+    }};
+    (
+        "[Recorder][StreamHealth] warning=encoder_submission_failures video={} audio={} path={}",
+        $video:expr,
+        $audio:expr,
+        $path:expr $(,)?
+    ) => {
+        ::std::eprintln!(
+            "[Recorder][StreamHealth] warning=encoder_submission_failures video={} audio={}",
+            $video,
+            $audio,
+        )
+    };
+    (
+        "[Recorder][AvHealth] finalize_ok={} audio_buffers={} audio_bytes={} audio_duration_ms={} video_duration_ms={} media_drift_ms={} startup_offset_ms={} max_audio_submit_gap_ms={} path={}",
+        $finalize_ok:expr,
+        $audio_buffers:expr,
+        $audio_bytes:expr,
+        $audio_duration_ms:expr,
+        $video_duration_ms:expr,
+        $media_drift_ms:expr,
+        $startup_offset_ms:expr,
+        $max_audio_submit_gap_ms:expr,
+        $path:expr $(,)?
+    ) => {
+        ::std::eprintln!(
+            "[Recorder][AvHealth] finalize_ok={} audio_buffers={} audio_bytes={} audio_duration_ms={} video_duration_ms={} media_drift_ms={} startup_offset_ms={} max_audio_submit_gap_ms={}",
+            $finalize_ok,
+            $audio_buffers,
+            $audio_bytes,
+            $audio_duration_ms,
+            $video_duration_ms,
+            $media_drift_ms,
+            $startup_offset_ms,
+            $max_audio_submit_gap_ms,
+        )
+    };
+    (
+        "[Recorder][AvHealth] warning=large_media_drift drift_ms={} audio_ms={} video_ms={} path={}",
+        $drift_ms:expr,
+        $audio_ms:expr,
+        $video_ms:expr,
+        $path:expr $(,)?
+    ) => {
+        ::std::eprintln!(
+            "[Recorder][AvHealth] warning=large_media_drift drift_ms={} audio_ms={} video_ms={}",
+            $drift_ms,
+            $audio_ms,
+            $video_ms,
+        )
+    };
+    (
+        "[Recorder][AvHealth] warning=large_audio_submission_gap gap_ms={} path={}",
+        $gap_ms:expr,
+        $path:expr $(,)?
+    ) => {
+        ::std::eprintln!(
+            "[Recorder][AvHealth] warning=large_audio_submission_gap gap_ms={}",
+            $gap_ms,
+        )
+    };
+    ($($arg:tt)*) => {
+        ::std::eprintln!($($arg)*)
+    };
+}
+
 // Load the instrumentation implementation as a normal Rust module. Using a
 // module path keeps the `//!` comments at the top of lib.rs valid as inner
 // module documentation, while the crate's Rust 2024 edition retains the
