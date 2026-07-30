@@ -22,13 +22,13 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Rebuild after the WinRT path-normalisation and redacted-field warning fixes.
-2. Repeat Pause/Resume and confirm native MediaComposition succeeds without FFmpeg fallback.
-3. Confirm newly completed recordings produce `thumbnail_ok=true` after normal-path conversion and retry.
+1. Rebuild after the warning cleanup and finalizer/thumbnail stage-diagnostic changes.
+2. Repeat Pause/Resume and capture every `FinalizerHealth` line to identify the exact native MediaComposition failure stage or confirm success without FFmpeg.
+3. Run one single-segment recording and capture `ThumbnailHealth` to identify the native thumbnail failure stage or confirm success.
 4. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
 5. Run the 60-second mostly-static full-source and selected-area duration matrix.
 6. Validate camera, submitted A/V drift, and audio-mixer health with camera + microphone + system audio.
-7. Refine Start/Resume/Stop bottlenecks and add a bounded native finalisation timeout.
+7. Fix the evidenced native finalizer/thumbnail stage, then refine Start/Resume/Stop bottlenecks and add a bounded native finalisation timeout.
 8. Remove the remaining FFmpeg compatibility paths.
 
 ---
@@ -118,10 +118,10 @@ Every implementation update must also include the security-impact block defined 
 | CTRL-05 | ✅ | Reduce timer-driven React renders | Timer updates at 250 ms |
 | CTRL-06 | 🟡 | Encoder warm-up for first Start | Warm-up succeeded, but Start remained about 1.3 seconds and comparison/refinement remain |
 | CTRL-07 | ✅ | Pause produces independent MP4 segments | Pause/Resume architecture active |
-| CTRL-08 | 🟡 | Windows MediaComposition primary finaliser | First runtime reached the native path but WinRT rejected an extended `\\?\` path; normal-path conversion and retry implemented, rerun pending |
+| CTRL-08 | 🟡 | Windows MediaComposition primary finaliser | First runtime fell back to FFmpeg; normal-path conversion, bounded open retries, per-segment metadata checks, HRESULT/stage diagnostics and render-reason reporting are implemented; rerun pending |
 | CTRL-09 | ✅ | FFmpeg emergency concat fallback | Runtime fallback produced the final recording after native finalisation failed |
 | CTRL-10 | 🟡 | Start-stage timing breakdown | Runtime emitted Start/Resume engine totals around 1.29/1.33 seconds; internal resolve/device/audio/camera/encoder split and target improvement remain |
-| CTRL-11 | 🟡 | Stop-stage timing breakdown | Pause was 820 ms; aggregate Stop was 3974 ms because native concat failed and FFmpeg ran; native-path rerun and internal finaliser split remain |
+| CTRL-11 | 🟡 | Stop-stage timing breakdown | Pause was 820 ms and aggregate Stop was 3974 ms; native MediaComposition now emits open/decode/append/render stage timings, with runtime evidence pending |
 | CTRL-12 | 🔵 | Pause/Resume without re-encoding | Timestamp rebasing/direct remux |
 | CTRL-13 | 🔵 | Bounded native finalisation timeout | Stop cannot wait indefinitely |
 | CTRL-14 | ⚪ | Cancel while Starting | Safe cancellation |
@@ -148,6 +148,8 @@ Every implementation update must also include the security-impact block defined 
 | HLT-16 | 🟡 | Variable-frame-aware timestamp timeline coverage and sample density | Runtime high-motion segments produced 99.8%/99.7% timeline coverage and 98.7%/99.4% density without false warnings; mostly-static validation remains |
 | HLT-17 | ✅ | Recorder control-phase timing and failure stage | Windows runtime emitted successful Start, Pause, Resume and Stop timing lines |
 | HLT-18 | 🟡 | Static-tail continuity and held-frame outcome | Runtime emitted valid continuity fields and snapshots for both segments; final tails were active so `hold_needed=false`; static hold validation remains |
+| HLT-19 | 🟡 | Native finalizer stage, retry, HRESULT and render-reason diagnostics | `FinalizerHealth` implemented for destination/segment metadata, open, decode, append and render stages; Windows Pause/Resume rerun pending |
+| HLT-20 | 🟡 | Native thumbnail failure-stage and retry diagnostics | `ThumbnailHealth` implemented for WinRT open/request/read stages and asynchronous backfill; Windows single-segment and fallback-output reruns pending |
 
 ## Recording library
 
@@ -158,8 +160,8 @@ Every implementation update must also include the security-impact block defined 
 | LIB-03 | ✅ | Rename recording | Metadata updates |
 | LIB-04 | ✅ | Delete recording | File/card removed |
 | LIB-05 | ✅ | Open recording location | Explorer selects file |
-| LIB-06 | 🟡 | Native Windows video thumbnails | First runtime returned `thumbnail_ok=false`; WinRT extended-path conversion and 0/150/400 ms background retries implemented, rerun pending |
-| LIB-07 | 🟡 | Background thumbnail backfill | Existing-library validation pending |
+| LIB-06 | 🟡 | Native Windows video thumbnails | First runtime failed; normal-path conversion, bounded retries, typed path-free failure stages and worker timing diagnostics are implemented; rerun pending |
+| LIB-07 | 🟡 | Background thumbnail backfill | Per-item failure stages and generated/failed totals implemented; existing-library validation pending |
 | LIB-08 | 🔵 | Automatic UI refresh after thumbnail completion | Thumbnail appears without page restart |
 | LIB-09 | 🔵 | Search and sorting | Title/date/duration sorting |
 | LIB-10 | ⚪ | Folders and collections | Organisational UI |
@@ -246,7 +248,7 @@ The detailed policy, trust boundaries, current data inventory, and mandatory sta
 | SEC-05 | 🟡 | Minimal Tauri capabilities and plugin set | Main-window core-only capability and plugin removal compile/run in Windows dev; packaged/runtime permission tests remain |
 | SEC-06 | 🟡 | Comprehensive Rust command-input validation and limits | UUID, title, FPS, device ID, output-path and settings validation added; dimensions/crops/source IDs/negative test suite remain |
 | SEC-07 | 🔵 | Remove or authenticate external executable discovery | Production never executes an unverified PATH/environment-selected FFmpeg binary |
-| SEC-08 | 🟡 | Structured diagnostic-log privacy and redaction | Provided Windows runtime confirmed structured health lines omit paths; free-form backend errors and future exported reports still require review |
+| SEC-08 | 🟡 | Structured diagnostic-log privacy and redaction | Provided Windows runtime confirmed structured health lines omit paths; new FinalizerHealth/ThumbnailHealth use roles, indexes, stages and HRESULTs instead of paths; free-form backend errors and future exported reports still require review |
 | SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot configuration committed; first successful update/alert cycle pending |
 | SEC-10 | 🔵 | Secret scanning and repository protection | Secret scanning enabled; test secret is blocked or detected without entering history |
 | SEC-11 | ⚪ | Signed executable, installer, updater, and update metadata | Signature verification passes on a clean machine |
@@ -329,3 +331,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-29 | `1b3026b..a7ffa55` | Added a final static-tail hold anchored to the user Pause/Stop request; VID-10, REL-03 and HLT-18 → 🟡 |
 | 2026-07-30 | `cb94dd5..af4994b` | Reinterpreted timeline health from timestamp span, retained sample density separately, and removed local paths from structured capture/A-V health output; HLT-16 and SEC-08 remain 🟡 pending Windows validation |
 | 2026-07-30 | `17435c8..ca871a3` | Windows build/runtime validated encoder/WGC/control diagnostics; fixed WinRT extended-path handling for native concat/thumbnails and removed redaction-related warnings |
+| 2026-07-30 | `6090651..9520869` | Added path-free native MediaComposition stage/HRESULT diagnostics and typed thumbnail failure-stage reporting; HLT-19 and HLT-20 → 🟡 |
