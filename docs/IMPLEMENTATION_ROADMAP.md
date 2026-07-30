@@ -22,13 +22,13 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Rebuild the recorder after the E0753 facade fix and the first security-hardening batch.
+1. Rebuild the recorder after the E0753 facade fix and the security/diagnostics batches.
 2. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
 3. Run negative tests against tampered recording metadata, invalid UUIDs, custom output paths, and out-of-root files.
-4. Validate timeline coverage, WGC delivery, camera health, submitted A/V drift, audio-mixer health, control-phase, and static-continuity diagnostics on Windows.
+4. Validate WGC delivery, variable-frame timeline coverage, camera health, submitted A/V drift, audio-mixer health, control-phase, and static-continuity diagnostics on Windows.
 5. Run the 60-second mostly-static full-source and selected-area duration matrix.
 6. Inspect Start/Pause/Resume/Stop timing fields, then refine slow engine sub-phases where evidence shows a bottleneck.
-7. Add bounded native finalisation timeouts and continue remaining command/security hardening.
+7. Add bounded native finalisation timeouts and finish residual free-form log/error redaction.
 8. Remove the remaining FFmpeg compatibility paths.
 
 ---
@@ -145,7 +145,7 @@ Every implementation update must also include the security-impact block defined 
 | HLT-13 | 🟡 | Submitted A/V duration drift and startup offset | Per-segment `AvHealth` line implemented; compare signed drift and playback on Windows |
 | HLT-14 | ⚪ | Exportable diagnostic report | Copy/save support bundle |
 | HLT-15 | ⚪ | User-friendly health summary | Non-technical UI status |
-| HLT-16 | 🟡 | Expected-frame timeline coverage and deficit | Facade rebuild/runtime pending after E0753 entry fix |
+| HLT-16 | 🟡 | Variable-frame-aware timestamp timeline coverage and sample density | `StreamHealth` reports `timeline_span_ms`, timestamp-based `timeline_coverage_pct`, and separate constant-FPS `sample_density_pct`; Windows static/high-motion validation pending |
 | HLT-17 | 🟡 | Recorder control-phase timing and failure stage | `ControlHealth` lines implemented for Start/Pause/Resume/Stop; Windows compile and timing-field validation pending |
 | HLT-18 | 🟡 | Static-tail continuity and held-frame outcome | `ContinuityHealth` reports requested wall span, video span, tail gap, snapshot availability and held-frame submission result; Windows validation pending |
 
@@ -246,7 +246,7 @@ The detailed policy, trust boundaries, current data inventory, and mandatory sta
 | SEC-05 | 🟡 | Minimal Tauri capabilities and plugin set | Main-window core-only capability added and fs/shell/dialog/opener runtime/dependencies removed; schema/runtime validation pending |
 | SEC-06 | 🟡 | Comprehensive Rust command-input validation and limits | UUID, title, FPS, device ID, output-path and settings validation added; dimensions/crops/source IDs/negative test suite remain |
 | SEC-07 | 🔵 | Remove or authenticate external executable discovery | Production never executes an unverified PATH/environment-selected FFmpeg binary |
-| SEC-08 | 🔵 | Diagnostic-log privacy and redaction | Thumbnail path logs reduced; complete capture-health path redaction still required |
+| SEC-08 | 🟡 | Structured diagnostic-log privacy and redaction | `StreamHealth`, `AvHealth`, `ControlHealth`, `ContinuityHealth`, camera/mixer health, thumbnail logs, and capture-output warnings omit local paths; free-form backend errors and future exported reports still require review |
 | SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot configuration committed; first successful update/alert cycle pending |
 | SEC-10 | 🔵 | Secret scanning and repository protection | Secret scanning enabled; test secret is blocked or detected without entering history |
 | SEC-11 | ⚪ | Signed executable, installer, updater, and update metadata | Signature verification passes on a clean machine |
@@ -327,3 +327,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-29 | `8a8990e..d8496d8` | Added per-source mixer underrun, queue-drop and peak-depth diagnostics for both Windows capture backends; AUD-08, AUD-09 and HLT-12 → 🟡 |
 | 2026-07-29 | `78e758f` | Added command/engine boundary timings and failure-stage diagnostics; CTRL-10, CTRL-11 and HLT-17 → 🟡 |
 | 2026-07-29 | `1b3026b..a7ffa55` | Added a final static-tail hold anchored to the user Pause/Stop request; VID-10, REL-03 and HLT-18 → 🟡 |
+| 2026-07-30 | `cb94dd5..af4994b` | Reinterpreted timeline health from timestamp span, retained sample density separately, and removed local paths from structured capture/A-V health output; HLT-16 and SEC-08 remain 🟡 pending Windows validation |
