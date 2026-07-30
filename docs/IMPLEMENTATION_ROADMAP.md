@@ -22,13 +22,13 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Rebuild the recorder after the E0753 facade fix and the security/diagnostics batches.
-2. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
-3. Run negative tests against tampered recording metadata, invalid UUIDs, custom output paths, and out-of-root files.
-4. Validate WGC delivery, variable-frame timeline coverage, camera health, submitted A/V drift, audio-mixer health, control-phase, and static-continuity diagnostics on Windows.
+1. Rebuild after the WinRT path-normalisation and redacted-field warning fixes.
+2. Repeat Pause/Resume and confirm native MediaComposition succeeds without FFmpeg fallback.
+3. Confirm newly completed recordings produce `thumbnail_ok=true` after normal-path conversion and retry.
+4. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
 5. Run the 60-second mostly-static full-source and selected-area duration matrix.
-6. Inspect Start/Pause/Resume/Stop timing fields, then refine slow engine sub-phases where evidence shows a bottleneck.
-7. Add bounded native finalisation timeouts and finish residual free-form log/error redaction.
+6. Validate camera, submitted A/V drift, and audio-mixer health with camera + microphone + system audio.
+7. Refine Start/Resume/Stop bottlenecks and add a bounded native finalisation timeout.
 8. Remove the remaining FFmpeg compatibility paths.
 
 ---
@@ -60,9 +60,9 @@ Every implementation update must also include the security-impact block defined 
 | VID-04 | 🟡 | Native BGRA buffer encoding for selected-area capture | Windows validation pending |
 | VID-05 | ✅ | Resolution-dependent bitrate selection | Health logs show expected output bitrate range |
 | VID-06 | ✅ | FPS limiting on high-refresh displays | Requested FPS is bounded |
-| VID-07 | 🟡 | Background H.264/AAC encoder warm-up | Compare first Start latency before/after warm-up |
-| VID-08 | 🟡 | Encoder submission counters | E0753 from the include-based entry was replaced by a normal module path in `942e99c`; rebuild/runtime pending |
-| VID-09 | 🟡 | WGC received/skipped/encoded counters | Central facade counter implemented; validate `frames_received`, `frames_rate_limited`, submissions and failures |
+| VID-07 | 🟡 | Background H.264/AAC encoder warm-up | Warm-up completed successfully in 1949 ms; before/after Start-latency comparison remains |
+| VID-08 | ✅ | Encoder submission counters | Windows run emitted 516 and 862 submitted frames with zero submission failures |
+| VID-09 | ✅ | WGC received/skipped/encoded counters | Windows run emitted 802/1351 received, 286/489 rate-limited, and zero processing deficit |
 | VID-10 | 🟡 | Static-screen duration continuity | Final unchanged tail is held to the Pause/Stop request timestamp through one throttled BGRA snapshot; 60-second Windows duration/playback validation pending |
 | VID-11 | 🔵 | Pure D3D11 selected-area crop | No CPU BGRA crop copy |
 | VID-12 | ⚪ | Hardware encoder capability reporting | Show selected hardware/software encoder path |
@@ -116,12 +116,12 @@ Every implementation update must also include the security-impact block defined 
 | CTRL-03 | ✅ | Double-click/race prevention | Conflicting operations blocked |
 | CTRL-04 | ✅ | Native operations off Tauri event thread | Commands use blocking workers |
 | CTRL-05 | ✅ | Reduce timer-driven React renders | Timer updates at 250 ms |
-| CTRL-06 | 🟡 | Encoder warm-up for first Start | Runtime latency comparison pending |
+| CTRL-06 | 🟡 | Encoder warm-up for first Start | Warm-up succeeded, but Start remained about 1.3 seconds and comparison/refinement remain |
 | CTRL-07 | ✅ | Pause produces independent MP4 segments | Pause/Resume architecture active |
-| CTRL-08 | 🟡 | Windows MediaComposition primary finaliser | Output quality/duration matrix pending |
-| CTRL-09 | ✅ | FFmpeg emergency concat fallback | Fallback implemented |
-| CTRL-10 | 🟡 | Start-stage timing breakdown | Command validation and total engine-start timing implemented; native resolve/device/audio/camera/encoder sub-phase refinement and Windows runtime evidence pending |
-| CTRL-11 | 🟡 | Stop-stage timing breakdown | Engine stop/finalisation total plus path validation, library insertion, persistence and thumbnail scheduling timings implemented; internal capture/audio/finaliser split and Windows runtime evidence pending |
+| CTRL-08 | 🟡 | Windows MediaComposition primary finaliser | First runtime reached the native path but WinRT rejected an extended `\\?\` path; normal-path conversion and retry implemented, rerun pending |
+| CTRL-09 | ✅ | FFmpeg emergency concat fallback | Runtime fallback produced the final recording after native finalisation failed |
+| CTRL-10 | 🟡 | Start-stage timing breakdown | Runtime emitted Start/Resume engine totals around 1.29/1.33 seconds; internal resolve/device/audio/camera/encoder split and target improvement remain |
+| CTRL-11 | 🟡 | Stop-stage timing breakdown | Pause was 820 ms; aggregate Stop was 3974 ms because native concat failed and FFmpeg ran; native-path rerun and internal finaliser split remain |
 | CTRL-12 | 🔵 | Pause/Resume without re-encoding | Timestamp rebasing/direct remux |
 | CTRL-13 | 🔵 | Bounded native finalisation timeout | Stop cannot wait indefinitely |
 | CTRL-14 | ⚪ | Cancel while Starting | Safe cancellation |
@@ -134,20 +134,20 @@ Every implementation update must also include the security-impact block defined 
 | HLT-02 | ✅ | Encoder startup duration | `start_ms` emitted |
 | HLT-03 | ✅ | Stop/finalisation duration | `stop_ms` emitted |
 | HLT-04 | ✅ | Output size and average bitrate | Bytes/Mbps emitted |
-| HLT-05 | 🟡 | Submitted frames and failures | E0753 entry fix committed; rebuild/runtime pending |
-| HLT-06 | 🟡 | Effective encoded FPS | E0753 entry fix committed; rebuild/runtime pending |
-| HLT-07 | 🟡 | Largest submitted-frame gap | E0753 entry fix committed; rebuild/runtime pending |
-| HLT-08 | 🟡 | Audio buffers and bytes submitted | E0753 entry fix committed; rebuild/runtime pending |
-| HLT-09 | 🟡 | WGC frames received | Facade handler wrapper implemented; rebuild/runtime pending after E0753 fix |
-| HLT-10 | 🟡 | FPS-limited frames skipped | Timestamp/target-FPS limiter mirror implemented; rebuild/runtime pending after E0753 fix |
-| HLT-11 | 🟡 | Camera frames received/applied/source misses | Per-segment `CameraHealth` line and warnings implemented; Windows runtime validation pending |
+| HLT-05 | ✅ | Submitted frames and failures | Runtime emitted submitted-frame totals and zero frame failures for both segments |
+| HLT-06 | ✅ | Effective encoded FPS | Runtime emitted 29.64 and 29.90 FPS against a 30 FPS target |
+| HLT-07 | ✅ | Largest submitted-frame gap | Runtime emitted maximum frame gaps of about 62.6 ms |
+| HLT-08 | 🟡 | Audio buffers and bytes submitted | Fields compiled and emitted zero with audio disabled; audio-enabled validation remains |
+| HLT-09 | ✅ | WGC frames received | Runtime emitted 802 and 1351 received frames |
+| HLT-10 | ✅ | FPS-limited frames skipped | Runtime emitted 286 and 489 rate-limited frames |
+| HLT-11 | 🟡 | Camera frames received/applied/source misses | Per-segment `CameraHealth` line and warnings implemented; Windows camera runtime log pending |
 | HLT-12 | 🟡 | Mixer underruns and queue overflows | Per-segment `AudioMixerHealth` line and warnings implemented for mic+system mixing; Windows validation pending |
 | HLT-13 | 🟡 | Submitted A/V duration drift and startup offset | Per-segment `AvHealth` line implemented; compare signed drift and playback on Windows |
 | HLT-14 | ⚪ | Exportable diagnostic report | Copy/save support bundle |
 | HLT-15 | ⚪ | User-friendly health summary | Non-technical UI status |
-| HLT-16 | 🟡 | Variable-frame-aware timestamp timeline coverage and sample density | `StreamHealth` reports `timeline_span_ms`, timestamp-based `timeline_coverage_pct`, and separate constant-FPS `sample_density_pct`; Windows static/high-motion validation pending |
-| HLT-17 | 🟡 | Recorder control-phase timing and failure stage | `ControlHealth` lines implemented for Start/Pause/Resume/Stop; Windows compile and timing-field validation pending |
-| HLT-18 | 🟡 | Static-tail continuity and held-frame outcome | `ContinuityHealth` reports requested wall span, video span, tail gap, snapshot availability and held-frame submission result; Windows validation pending |
+| HLT-16 | 🟡 | Variable-frame-aware timestamp timeline coverage and sample density | Runtime high-motion segments produced 99.8%/99.7% timeline coverage and 98.7%/99.4% density without false warnings; mostly-static validation remains |
+| HLT-17 | ✅ | Recorder control-phase timing and failure stage | Windows runtime emitted successful Start, Pause, Resume and Stop timing lines |
+| HLT-18 | 🟡 | Static-tail continuity and held-frame outcome | Runtime emitted valid continuity fields and snapshots for both segments; final tails were active so `hold_needed=false`; static hold validation remains |
 
 ## Recording library
 
@@ -158,7 +158,7 @@ Every implementation update must also include the security-impact block defined 
 | LIB-03 | ✅ | Rename recording | Metadata updates |
 | LIB-04 | ✅ | Delete recording | File/card removed |
 | LIB-05 | ✅ | Open recording location | Explorer selects file |
-| LIB-06 | 🟡 | Native Windows video thumbnails | Windows runtime validation pending |
+| LIB-06 | 🟡 | Native Windows video thumbnails | First runtime returned `thumbnail_ok=false`; WinRT extended-path conversion and 0/150/400 ms background retries implemented, rerun pending |
 | LIB-07 | 🟡 | Background thumbnail backfill | Existing-library validation pending |
 | LIB-08 | 🔵 | Automatic UI refresh after thumbnail completion | Thumbnail appears without page restart |
 | LIB-09 | 🔵 | Search and sorting | Title/date/duration sorting |
@@ -240,13 +240,13 @@ The detailed policy, trust boundaries, current data inventory, and mandatory sta
 | ID | Status | Work | Acceptance evidence |
 |---|---:|---|---|
 | SEC-01 | 🟡 | Threat model, data inventory, trust boundaries, and security review policy | Baseline document committed; architecture review and future data-flow updates pending |
-| SEC-02 | 🟡 | Strict production Content Security Policy | Production/dev CSP and security headers configured; Windows dev and packaged UI validation pending |
+| SEC-02 | 🟡 | Strict production Content Security Policy | Production/dev CSP and security headers configured; Windows dev app starts; packaged UI validation remains |
 | SEC-03 | 🟡 | Replace wildcard asset-protocol scope with recording-only access | Scope limited to `$HOME/Recordings/*.mp4`; playback and arbitrary-file rejection tests pending |
 | SEC-04 | 🟡 | Canonical recording-path allowlist for create/delete/open/thumbnail/upload | UUID/filename/root/regular-file checks implemented for current local operations; negative and filesystem-race tests pending |
-| SEC-05 | 🟡 | Minimal Tauri capabilities and plugin set | Main-window core-only capability added and fs/shell/dialog/opener runtime/dependencies removed; schema/runtime validation pending |
+| SEC-05 | 🟡 | Minimal Tauri capabilities and plugin set | Main-window core-only capability and plugin removal compile/run in Windows dev; packaged/runtime permission tests remain |
 | SEC-06 | 🟡 | Comprehensive Rust command-input validation and limits | UUID, title, FPS, device ID, output-path and settings validation added; dimensions/crops/source IDs/negative test suite remain |
 | SEC-07 | 🔵 | Remove or authenticate external executable discovery | Production never executes an unverified PATH/environment-selected FFmpeg binary |
-| SEC-08 | 🟡 | Structured diagnostic-log privacy and redaction | `StreamHealth`, `AvHealth`, `ControlHealth`, `ContinuityHealth`, camera/mixer health, thumbnail logs, and capture-output warnings omit local paths; free-form backend errors and future exported reports still require review |
+| SEC-08 | 🟡 | Structured diagnostic-log privacy and redaction | Provided Windows runtime confirmed structured health lines omit paths; free-form backend errors and future exported reports still require review |
 | SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot configuration committed; first successful update/alert cycle pending |
 | SEC-10 | 🔵 | Secret scanning and repository protection | Secret scanning enabled; test secret is blocked or detected without entering history |
 | SEC-11 | ⚪ | Signed executable, installer, updater, and update metadata | Signature verification passes on a clean machine |
@@ -328,3 +328,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-29 | `78e758f` | Added command/engine boundary timings and failure-stage diagnostics; CTRL-10, CTRL-11 and HLT-17 → 🟡 |
 | 2026-07-29 | `1b3026b..a7ffa55` | Added a final static-tail hold anchored to the user Pause/Stop request; VID-10, REL-03 and HLT-18 → 🟡 |
 | 2026-07-30 | `cb94dd5..af4994b` | Reinterpreted timeline health from timestamp span, retained sample density separately, and removed local paths from structured capture/A-V health output; HLT-16 and SEC-08 remain 🟡 pending Windows validation |
+| 2026-07-30 | `17435c8..ca871a3` | Windows build/runtime validated encoder/WGC/control diagnostics; fixed WinRT extended-path handling for native concat/thumbnails and removed redaction-related warnings |
