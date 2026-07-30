@@ -109,9 +109,8 @@ impl CaptureSessionMetrics {
         }
         if succeeded && bytes == 0 {
             eprintln!(
-                "[Recorder][Health] warning=empty_capture_output backend={} path={}",
+                "[Recorder][Health] warning=empty_capture_output backend={}",
                 self.backend.label(),
-                self.output_path.display(),
             );
         }
     }
