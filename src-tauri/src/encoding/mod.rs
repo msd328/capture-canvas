@@ -12,7 +12,9 @@ use std::process::{Command, Stdio};
 #[cfg(windows)]
 use std::sync::atomic::{AtomicU8, Ordering};
 #[cfg(windows)]
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[cfg(windows)]
+use windows::core::HSTRING;
 
 #[cfg(windows)]
 const WARMUP_NOT_STARTED: u8 = 0;
@@ -25,6 +27,23 @@ const WARMUP_FAILED: u8 = 3;
 
 #[cfg(windows)]
 static NATIVE_ENCODER_WARMUP_STATE: AtomicU8 = AtomicU8::new(WARMUP_NOT_STARTED);
+
+/// Convert a canonical Windows path into the normal DOS/UNC form accepted by
+/// WinRT Storage APIs. `std::fs::canonicalize` commonly returns an extended
+/// `\\?\` path, which `StorageFile::GetFileFromPathAsync` can reject.
+#[cfg(windows)]
+pub(crate) fn windows_storage_path(path: &Path) -> Result<HSTRING> {
+    let absolute = std::fs::canonicalize(path).context("Unable to resolve Windows media path")?;
+    let extended = absolute.to_string_lossy();
+    let normalized = if let Some(rest) = extended.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{rest}")
+    } else if let Some(rest) = extended.strip_prefix(r"\\?\") {
+        rest.to_string()
+    } else {
+        extended.into_owned()
+    };
+    Ok(HSTRING::from(normalized))
+}
 
 /// Start the one-time Media Foundation warm-up without delaying application setup.
 ///
@@ -209,62 +228,74 @@ pub fn generate_thumbnail_data_url(video_path: &Path) -> Option<String> {
     {
         use base64::engine::general_purpose::STANDARD;
         use base64::Engine as _;
-        use windows::core::HSTRING;
         use windows::Storage::FileProperties::{ThumbnailMode, ThumbnailOptions};
         use windows::Storage::Streams::{Buffer, DataReader, InputStreamOptions};
         use windows::Storage::StorageFile;
 
         const REQUESTED_EDGE: u32 = 480;
         const MAX_THUMBNAIL_BYTES: u64 = 16 * 1024 * 1024;
+        const RETRY_DELAYS_MS: [u64; 3] = [0, 150, 400];
 
-        let absolute = std::fs::canonicalize(video_path).ok()?;
-        let path = HSTRING::from(absolute.to_string_lossy().as_ref());
-        let file = StorageFile::GetFileFromPathAsync(&path).ok()?.get().ok()?;
-        let thumbnail = file
-            .GetThumbnailAsync(
-                ThumbnailMode::VideosView,
-                REQUESTED_EDGE,
-                ThumbnailOptions::UseCurrentScale,
-            )
-            .ok()?
-            .get()
-            .ok()?;
+        let path = windows_storage_path(video_path).ok()?;
+        for delay_ms in RETRY_DELAYS_MS {
+            if delay_ms > 0 {
+                std::thread::sleep(Duration::from_millis(delay_ms));
+            }
 
-        let size = thumbnail.Size().ok()?;
-        if size == 0 || size > MAX_THUMBNAIL_BYTES || size > u64::from(u32::MAX) {
-            let _ = thumbnail.Close();
-            return None;
+            let generated = (|| -> Option<String> {
+                let file = StorageFile::GetFileFromPathAsync(&path).ok()?.get().ok()?;
+                let thumbnail = file
+                    .GetThumbnailAsync(
+                        ThumbnailMode::VideosView,
+                        REQUESTED_EDGE,
+                        ThumbnailOptions::UseCurrentScale,
+                    )
+                    .ok()?
+                    .get()
+                    .ok()?;
+
+                let size = thumbnail.Size().ok()?;
+                if size == 0 || size > MAX_THUMBNAIL_BYTES || size > u64::from(u32::MAX) {
+                    let _ = thumbnail.Close();
+                    return None;
+                }
+
+                let buffer = Buffer::Create(size as u32).ok()?;
+                let filled = thumbnail
+                    .ReadAsync(&buffer, size as u32, InputStreamOptions::None)
+                    .ok()?
+                    .get()
+                    .ok()?;
+                let length = filled.Length().ok()? as usize;
+                if length == 0 {
+                    let _ = thumbnail.Close();
+                    return None;
+                }
+
+                let reader = DataReader::FromBuffer(&filled).ok()?;
+                let mut bytes = vec![0u8; length];
+                reader.ReadBytes(&mut bytes).ok()?;
+
+                let content_type = thumbnail
+                    .ContentType()
+                    .ok()
+                    .map(|value| value.to_string())
+                    .filter(|value| value.starts_with("image/"))
+                    .unwrap_or_else(|| "image/jpeg".to_string());
+
+                let _ = reader.Close();
+                let _ = thumbnail.Close();
+                Some(format!(
+                    "data:{content_type};base64,{}",
+                    STANDARD.encode(bytes)
+                ))
+            })();
+
+            if generated.is_some() {
+                return generated;
+            }
         }
-
-        let buffer = Buffer::Create(size as u32).ok()?;
-        let filled = thumbnail
-            .ReadAsync(&buffer, size as u32, InputStreamOptions::None)
-            .ok()?
-            .get()
-            .ok()?;
-        let length = filled.Length().ok()? as usize;
-        if length == 0 {
-            let _ = thumbnail.Close();
-            return None;
-        }
-
-        let reader = DataReader::FromBuffer(&filled).ok()?;
-        let mut bytes = vec![0u8; length];
-        reader.ReadBytes(&mut bytes).ok()?;
-
-        let content_type = thumbnail
-            .ContentType()
-            .ok()
-            .map(|value| value.to_string())
-            .filter(|value| value.starts_with("image/"))
-            .unwrap_or_else(|| "image/jpeg".to_string());
-
-        let _ = reader.Close();
-        let _ = thumbnail.Close();
-        return Some(format!(
-            "data:{content_type};base64,{}",
-            STANDARD.encode(bytes)
-        ));
+        None
     }
 
     #[cfg(not(windows))]
