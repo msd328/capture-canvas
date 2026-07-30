@@ -78,9 +78,18 @@ impl LibraryStore {
             .name("recorder-thumbnail".to_string())
             .spawn(move || {
                 let started = std::time::Instant::now();
-                let Some(thumbnail) = encoding::generate_thumbnail_data_url(&worker_path) else {
-                    eprintln!("[Recorder][Health] thumbnail_ok=false id={worker_id}");
-                    return;
+                let thumbnail = match encoding::generate_thumbnail_data_url(&worker_path) {
+                    Ok(thumbnail) => thumbnail,
+                    Err(error) => {
+                        eprintln!(
+                            "[Recorder][ThumbnailHealth] ok=false id={worker_id} stage={} attempt={} code={} thumbnail_ms={}",
+                            error.stage,
+                            error.attempt,
+                            error.code.as_deref().unwrap_or("none"),
+                            started.elapsed().as_millis()
+                        );
+                        return;
+                    }
                 };
 
                 let changed = {
@@ -89,6 +98,10 @@ impl LibraryStore {
                         .iter_mut()
                         .find(|recording| recording.id == worker_id)
                     else {
+                        eprintln!(
+                            "[Recorder][ThumbnailHealth] ok=false id={worker_id} stage=library_entry_missing attempt=0 code=none thumbnail_ms={}",
+                            started.elapsed().as_millis()
+                        );
                         return;
                     };
                     if recording.thumbnail_data_url.is_some() {
@@ -103,20 +116,26 @@ impl LibraryStore {
                     let _persist_guard = persist_lock.lock();
                     if let Err(error) = write_json(&metadata_path, &*recordings.read()) {
                         eprintln!(
-                            "[Recorder][Health] thumbnail_persist_ok=false id={worker_id} error={error}"
+                            "[Recorder][ThumbnailHealth] ok=false id={worker_id} stage=persist attempt=0 code={error} thumbnail_ms={}",
+                            started.elapsed().as_millis()
                         );
                     } else {
                         eprintln!(
-                            "[Recorder][Health] thumbnail_ok=true id={worker_id} thumbnail_ms={}",
+                            "[Recorder][ThumbnailHealth] ok=true id={worker_id} stage=complete attempt=0 code=none thumbnail_ms={}",
                             started.elapsed().as_millis()
                         );
                     }
+                } else {
+                    eprintln!(
+                        "[Recorder][ThumbnailHealth] ok=true id={worker_id} stage=already_present attempt=0 code=none thumbnail_ms={}",
+                        started.elapsed().as_millis()
+                    );
                 }
             });
 
         if let Err(error) = spawn_result {
             eprintln!(
-                "[Recorder][Health] thumbnail_ok=false id={id} error=unable_to_spawn_thumbnail_worker:{error}"
+                "[Recorder][ThumbnailHealth] ok=false id={id} stage=spawn_worker attempt=0 code={error} thumbnail_ms=0"
             );
         }
     }
@@ -150,9 +169,20 @@ impl LibraryStore {
             .name("recorder-thumbnail-backfill".to_string())
             .spawn(move || {
                 let mut generated = 0usize;
+                let mut failed = 0usize;
                 for (id, file_path) in pending {
-                    let Some(thumbnail) = encoding::generate_thumbnail_data_url(&file_path) else {
-                        continue;
+                    let thumbnail = match encoding::generate_thumbnail_data_url(&file_path) {
+                        Ok(thumbnail) => thumbnail,
+                        Err(error) => {
+                            failed = failed.saturating_add(1);
+                            eprintln!(
+                                "[Recorder][ThumbnailHealth] ok=false id={id} stage={} attempt={} code={} backfill=true",
+                                error.stage,
+                                error.attempt,
+                                error.code.as_deref().unwrap_or("none")
+                            );
+                            continue;
+                        }
                     };
                     let mut guard = recordings.write();
                     if let Some(recording) = guard.iter_mut().find(|recording| recording.id == id) {
@@ -167,19 +197,24 @@ impl LibraryStore {
                     let _persist_guard = persist_lock.lock();
                     if let Err(error) = write_json(&metadata_path, &*recordings.read()) {
                         eprintln!(
-                            "[Recorder][Health] thumbnail_backfill_ok=false generated={generated} error={error}"
+                            "[Recorder][ThumbnailHealth] ok=false stage=backfill_persist generated={generated} failed={failed} code={error}"
                         );
                     } else {
                         eprintln!(
-                            "[Recorder][Health] thumbnail_backfill_ok=true generated={generated}"
+                            "[Recorder][ThumbnailHealth] ok=true stage=backfill_complete generated={generated} failed={failed} code=none"
                         );
                     }
+                } else {
+                    eprintln!(
+                        "[Recorder][ThumbnailHealth] ok={} stage=backfill_complete generated=0 failed={failed} code=none",
+                        failed == 0
+                    );
                 }
             });
 
         if let Err(error) = spawn_result {
             eprintln!(
-                "[Recorder][Health] thumbnail_backfill_ok=false error=unable_to_spawn_thumbnail_backfill:{error}"
+                "[Recorder][ThumbnailHealth] ok=false stage=spawn_backfill_worker generated=0 failed=0 code={error}"
             );
         }
     }
