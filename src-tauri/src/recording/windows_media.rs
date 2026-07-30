@@ -278,6 +278,7 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
         None,
     );
 
+    let mut cleanup_deferred = false;
     let result = (|| -> Result<()> {
         let destination = storage_file(&candidate_path, "destination", None)?;
 
@@ -425,7 +426,7 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
         );
 
         let mut timeout_triggered = false;
-        let outcome = loop {
+        let outcome = 'render_wait: loop {
             let status = match render.Status() {
                 Ok(status) => status,
                 Err(error) => {
@@ -439,7 +440,7 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
                         render_started.elapsed().as_millis(),
                         Some(&code),
                     );
-                    break RenderOutcome::UnsettledTimeout {
+                    break 'render_wait RenderOutcome::UnsettledTimeout {
                         cancel_requested: false,
                         last_status: format!("status_error:{code}"),
                     };
@@ -451,15 +452,15 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
                     Ok(reason) => reason,
                     Err(error) => {
                         let code = error_code(&error);
-                        break RenderOutcome::Failed(anyhow!(
+                        break 'render_wait RenderOutcome::Failed(anyhow!(
                             "Windows media finalization result failed hresult={code}"
                         ));
                     }
                 };
-                break RenderOutcome::Completed(reason);
+                break 'render_wait RenderOutcome::Completed(reason);
             }
             if status == AsyncStatus::Canceled {
-                break RenderOutcome::Failed(anyhow!(
+                break 'render_wait RenderOutcome::Failed(anyhow!(
                     "Windows media finalization was canceled"
                 ));
             }
@@ -468,12 +469,12 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
                     .ErrorCode()
                     .map(|value| format!("{value:?}"))
                     .unwrap_or_else(|_| "unknown".to_string());
-                break RenderOutcome::Failed(anyhow!(
+                break 'render_wait RenderOutcome::Failed(anyhow!(
                     "Windows media finalization entered error state hresult={code}"
                 ));
             }
 
-            if !timeout_triggered && render_started.elapsed() >= RENDER_TIMEOUT {
+            if render_started.elapsed() >= RENDER_TIMEOUT {
                 timeout_triggered = true;
                 eprintln!(
                     "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=render_timeout ok=false role=destination elapsed_ms={} timeout_ms={}",
@@ -484,9 +485,7 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
                 let cancel_started = Instant::now();
                 let cancel_result = render.Cancel();
                 let cancel_requested = cancel_result.is_ok();
-                let cancel_code = cancel_result
-                    .err()
-                    .map(|error| error_code(&error));
+                let cancel_code = cancel_result.err().map(|error| error_code(&error));
                 log_stage(
                     "cancel_render",
                     cancel_requested,
@@ -502,7 +501,7 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
                         Ok(status) => status,
                         Err(error) => {
                             let code = error_code(&error);
-                            break RenderOutcome::UnsettledTimeout {
+                            break 'render_wait RenderOutcome::UnsettledTimeout {
                                 cancel_requested,
                                 last_status: format!("status_error:{code}"),
                             };
@@ -514,7 +513,7 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
                             Ok(reason) => reason,
                             Err(error) => {
                                 let code = error_code(&error);
-                                break RenderOutcome::Failed(anyhow!(
+                                break 'render_wait RenderOutcome::Failed(anyhow!(
                                     "Windows media finalization result failed after timeout hresult={code}"
                                 ));
                             }
@@ -523,14 +522,14 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
                             "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=cancel_settle ok=true role=destination terminal_status=completed elapsed_ms={}",
                             cancel_started.elapsed().as_millis()
                         );
-                        break RenderOutcome::Completed(reason);
+                        break 'render_wait RenderOutcome::Completed(reason);
                     }
                     if status == AsyncStatus::Canceled {
                         eprintln!(
                             "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=cancel_settle ok=true role=destination terminal_status=canceled elapsed_ms={}",
                             cancel_started.elapsed().as_millis()
                         );
-                        break RenderOutcome::Failed(anyhow!(
+                        break 'render_wait RenderOutcome::Failed(anyhow!(
                             "Windows media finalization timed out and was canceled"
                         ));
                     }
@@ -543,7 +542,7 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
                             "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=cancel_settle ok=true role=destination terminal_status=error elapsed_ms={} hresult={code}",
                             cancel_started.elapsed().as_millis()
                         );
-                        break RenderOutcome::Failed(anyhow!(
+                        break 'render_wait RenderOutcome::Failed(anyhow!(
                             "Windows media finalization timed out then entered error state hresult={code}"
                         ));
                     }
@@ -553,7 +552,7 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
                             cancel_started.elapsed().as_millis(),
                             CANCELLATION_GRACE.as_millis()
                         );
-                        break RenderOutcome::UnsettledTimeout {
+                        break 'render_wait RenderOutcome::UnsettledTimeout {
                             cancel_requested,
                             last_status: "started".to_string(),
                         };
@@ -561,10 +560,9 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
 
                     std::thread::sleep(STATUS_POLL_INTERVAL);
                 }
-            } else {
-                std::thread::sleep(STATUS_POLL_INTERVAL);
-                continue;
             }
+
+            std::thread::sleep(STATUS_POLL_INTERVAL);
         };
 
         let _ = render.Close();
@@ -581,7 +579,6 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
                 Ok(())
             }
             RenderOutcome::Completed(reason) => {
-                let _ = fs::remove_file(&candidate_path);
                 eprintln!(
                     "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=render_result ok=false role=destination elapsed_ms={} reason={reason:?} timeout_triggered={timeout_triggered}",
                     render_started.elapsed().as_millis()
@@ -590,22 +587,25 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
                     "Windows media finalization rejected recording segments reason={reason:?}"
                 ))
             }
-            RenderOutcome::Failed(error) => {
-                let _ = fs::remove_file(&candidate_path);
-                Err(error)
-            }
+            RenderOutcome::Failed(error) => Err(error),
             RenderOutcome::UnsettledTimeout {
                 cancel_requested,
                 last_status,
-            } => Err(anyhow!(
-                "Windows media finalization exceeded the bounded deadline cancel_requested={cancel_requested} last_status={last_status} candidate_cleanup_deferred=true"
-            )),
+            } => {
+                cleanup_deferred = true;
+                Err(anyhow!(
+                    "Windows media finalization exceeded the bounded deadline cancel_requested={cancel_requested} last_status={last_status} candidate_cleanup_deferred=true"
+                ))
+            }
         }
     })();
 
     if let Err(error) = result {
+        if !cleanup_deferred {
+            let _ = fs::remove_file(&candidate_path);
+        }
         eprintln!(
-            "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=complete ok=false segment_count={} total_ms={}",
+            "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=complete ok=false segment_count={} total_ms={} cleanup_deferred={cleanup_deferred}",
             segments.len(),
             total_started.elapsed().as_millis()
         );
@@ -617,7 +617,7 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
     }
 
     eprintln!(
-        "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=complete ok=true segment_count={} total_ms={}",
+        "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=complete ok=true segment_count={} total_ms={} cleanup_deferred=false",
         segments.len(),
         total_started.elapsed().as_millis()
     );
