@@ -185,10 +185,14 @@ fn is_recorder_temporary_artifact(file_name: &str) -> bool {
         let Some(suffix) = canonical_uuid_suffix(candidate) else {
             return false;
         };
-        let Some(identity) = suffix
-            .strip_prefix(".native-finalizing-")
-            .and_then(|value| value.strip_suffix(".mp4"))
-        else {
+        let identity = [".native-finalizing-", ".ffmpeg-finalizing-"]
+            .into_iter()
+            .find_map(|prefix| {
+                suffix
+                    .strip_prefix(prefix)
+                    .and_then(|value| value.strip_suffix(".mp4"))
+            });
+        let Some(identity) = identity else {
             return false;
         };
         let Some((process_id, nonce)) = identity.split_once('-') else {
@@ -391,12 +395,18 @@ mod tests {
         assert!(is_recorder_temporary_artifact(&format!(
             ".{ID}.native-finalizing-1234-987654321.mp4"
         )));
+        assert!(is_recorder_temporary_artifact(&format!(
+            ".{ID}.ffmpeg-finalizing-1234-987654321.mp4"
+        )));
 
         assert!(!is_recorder_temporary_artifact(&format!("{ID}.mp4")));
         assert!(!is_recorder_temporary_artifact(&format!("{ID}.part00.mp4")));
         assert!(!is_recorder_temporary_artifact(&format!("{ID}.part000.mov")));
         assert!(!is_recorder_temporary_artifact(&format!(
             ".{ID}.native-finalizing-process-nonce.mp4"
+        )));
+        assert!(!is_recorder_temporary_artifact(&format!(
+            ".{ID}.ffmpeg-finalizing-process-nonce.mp4"
         )));
         assert!(!is_recorder_temporary_artifact(
             "123E4567-E89B-12D3-A456-426614174000.part000.mp4"
