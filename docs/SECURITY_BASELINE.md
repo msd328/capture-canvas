@@ -15,6 +15,7 @@ No software can promise that attacks or data leakage are impossible. The project
 - System/desktop audio.
 - Camera frames.
 - Completed MP4 recordings and temporary recording segments.
+- Hidden native-finalizer candidate MP4 files that may temporarily remain after an unsettled cancellation.
 - Source preview images and generated video thumbnails.
 
 ### Local metadata
@@ -77,8 +78,10 @@ The following controls were implemented on 2026-07-29 and 2026-07-30 and remain 
 - FPS, device-ID length/content, title length/content, and output-directory settings receive Rust-side validation.
 - Background thumbnail error logs no longer include the full recording path.
 - Structured `StreamHealth`, `AvHealth`, `ControlHealth`, `ContinuityHealth`, `CameraHealth`, `AudioMixerHealth`, and capture-output warning lines omit local filesystem paths.
-- `FinalizerHealth` reports only backend, stage, role, segment index, retry attempt, elapsed time, file size, HRESULT and render-reason identifiers.
+- `FinalizerHealth` reports only backend, stage, role, segment index, retry attempt, elapsed time, file size, HRESULT, timeout/cancellation state and render-reason identifiers.
 - `ThumbnailHealth` reports only recording UUID, stage, retry attempt, elapsed time, generated/failed totals and HRESULT/status identifiers.
+- Native MediaComposition renders into a hidden unique candidate rather than the final recording path, preventing a timed-out WinRT operation and FFmpeg fallback from writing the same destination concurrently.
+- Native rendering uses a fixed 20-second deadline and two-second cancellation-settle grace; an unsettled candidate is not deleted while Windows may still own it.
 
 ## Required security impact block for every implementation batch
 
@@ -111,6 +114,8 @@ Use `None` explicitly rather than omitting a field.
 - FFmpeg compatibility discovery can use an environment override or PATH lookup.
 - Structured recorder health lines are path-redacted, but free-form backend errors, future crash reports, support bundles, and exported diagnostics still require a complete privacy review.
 - Finalizer and thumbnail HRESULT/stage logs require Windows runtime review to ensure platform-provided identifiers never contain unexpected user-controlled text.
+- A cancellation that remains unsettled after the two-second grace can leave a hidden MP4 candidate containing captured content until startup orphan cleanup is implemented.
+- The MediaComposition render phase is bounded, but WinRT file-open/clip-decode waits and FFmpeg fallback execution are not yet hard-bounded.
 - Dependency vulnerability alerts, secret scanning, signing, updater verification, and penetration testing are not yet complete.
 
 These risks are tracked by SEC IDs in the implementation roadmap and block public production release where applicable.
@@ -279,7 +284,54 @@ remain pending.
 Remaining risks:
 The exact native MediaComposition and thumbnail failure causes are not yet known. HRESULT
 identifiers require runtime review. FFmpeg fallback still trusts current discovery rules.
-Recordings remain unencrypted at rest, and native finalisation still lacks a hard timeout.
+Recordings remain unencrypted at rest.
+```
+
+## Batch security record — 2026-07-30 bounded native render
+
+```text
+Security impact:
+Isolated native MediaComposition output from the final recording path and bounded the
+render wait before requesting cancellation.
+
+Data accessed:
+Recording segment files, WinRT async status/error state, monotonic timing and the final
+recording filename used to derive a hidden unique candidate name.
+
+Data written:
+A hidden native-finalizer candidate MP4, the final MP4 after successful publication, and
+path-free FinalizerHealth timeout/cancellation diagnostics.
+
+Network communication added:
+None.
+
+New permissions/capabilities:
+None.
+
+External processes:
+None added. Existing FFmpeg concat fallback remains available after native failure or
+cancellation.
+
+Untrusted inputs:
+Generated MP4 segments, WinRT status/HRESULT values, filesystem operation results and
+MediaComposition render output.
+
+Validation added:
+A fixed 20-second render deadline, two-second cancellation-settle grace, isolated unique
+candidate destination, terminal-state polling, bounded publication retries, deferred
+cleanup reporting and no concurrent native/fallback writes to the final MP4.
+
+Secrets involved:
+None.
+
+Security tests completed:
+Static control-flow, destination-isolation, cleanup and structured-log review only.
+
+Remaining risks:
+Windows compilation/runtime validation is pending. An unsettled cancellation can leave a
+hidden candidate containing captured content. Startup orphan cleanup is not implemented.
+WinRT open/decode waits and FFmpeg fallback are not yet hard-bounded. Recordings remain
+unencrypted at rest.
 ```
 
 ## Vulnerability handling
