@@ -64,7 +64,7 @@ The current recorder has no application account token or API credential storage.
 
 ## Current implemented desktop controls
 
-The following controls were implemented on 2026-07-29 and remain validation-pending until the Windows build and negative tests pass:
+The following controls were implemented on 2026-07-29 and 2026-07-30 and remain validation-pending until the Windows build and negative tests pass:
 
 - Production CSP blocks unapproved script, connection, frame, form, object, image, and media origins.
 - Development CSP allows only the local Tauri IPC endpoints and the localhost Vite/HMR server.
@@ -76,6 +76,7 @@ The following controls were implemented on 2026-07-29 and remain validation-pend
 - Existing recording paths are canonicalised and must resolve to a non-empty regular file directly under the approved Recordings root before open, delete, rename validation, thumbnail generation, startup loading, or library persistence.
 - FPS, device-ID length/content, title length/content, and output-directory settings receive Rust-side validation.
 - Background thumbnail error logs no longer include the full recording path.
+- Structured `StreamHealth`, `AvHealth`, `ControlHealth`, `ContinuityHealth`, `CameraHealth`, `AudioMixerHealth`, and capture-output warning lines omit local filesystem paths.
 
 ## Required security impact block for every implementation batch
 
@@ -106,7 +107,7 @@ Use `None` explicitly rather than omitting a field.
 - Metadata and recordings are not encrypted at rest.
 - Full command validation is not complete for every dimension, crop, source identifier, and collection size.
 - FFmpeg compatibility discovery can use an environment override or PATH lookup.
-- Some capture health logs can still contain full local paths.
+- Structured recorder health lines are path-redacted, but free-form backend errors, future crash reports, support bundles, and exported diagnostics still require a complete privacy review.
 - Dependency vulnerability alerts, secret scanning, signing, updater verification, and penetration testing are not yet complete.
 
 These risks are tracked by SEC IDs in the implementation roadmap and block public production release where applicable.
@@ -186,6 +187,50 @@ Remaining risks:
 Filesystem race hardening, OS known-folder resolution, encryption at rest, FFmpeg
 executable trust, complete log redaction, secret scanning, signing, and penetration
 testing remain open.
+```
+
+## Batch security record — 2026-07-30 timeline and log privacy
+
+```text
+Security impact:
+Removed local filesystem paths from current structured recorder health output and
+separated variable-frame timeline continuity from constant-FPS sample density.
+
+Data accessed:
+Existing frame counts, frame timestamps, monotonic wall time, encoder results, audio
+byte counts, and output-path values used only for warm-up suppression/internal file checks.
+
+Data written:
+Path-free local health diagnostics and repository tracking documentation.
+
+Network communication added:
+None.
+
+New permissions/capabilities:
+None.
+
+External processes:
+None added.
+
+Untrusted inputs:
+WGC timestamps, encoder submission counters, audio buffer sizes, and filesystem paths
+already used by the recording pipeline.
+
+Validation added:
+Timestamp-span continuity percentage, separate sample-density percentage, path-free
+warning formats, and suppression of the obsolete density-based continuity warning.
+
+Secrets involved:
+None.
+
+Security tests completed:
+Static format-string, diagnostics-boundary, and data-flow review only. Windows compile,
+runtime logs, and a scan of collected diagnostics for usernames/paths remain pending.
+
+Remaining risks:
+Free-form backend errors may still contain local context. Future crash reporting,
+support bundles, and exported diagnostic reports need explicit redaction. Recordings
+remain unencrypted at rest.
 ```
 
 ## Vulnerability handling
