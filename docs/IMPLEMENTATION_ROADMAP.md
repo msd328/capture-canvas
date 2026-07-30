@@ -22,14 +22,15 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Rebuild after the warning cleanup and finalizer/thumbnail stage-diagnostic changes.
-2. Repeat Pause/Resume and capture every `FinalizerHealth` line to identify the exact native MediaComposition failure stage or confirm success without FFmpeg.
-3. Run one single-segment recording and capture `ThumbnailHealth` to identify the native thumbnail failure stage or confirm success.
-4. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
-5. Run the 60-second mostly-static full-source and selected-area duration matrix.
-6. Validate camera, submitted A/V drift, and audio-mixer health with camera + microphone + system audio.
-7. Fix the evidenced native finalizer/thumbnail stage, then refine Start/Resume/Stop bottlenecks and add a bounded native finalisation timeout.
-8. Remove the remaining FFmpeg compatibility paths.
+1. Rebuild after the bounded native-render and isolated-candidate changes.
+2. Repeat Pause/Resume and confirm normal `FinalizerHealth` output plus successful candidate publication.
+3. Confirm the 20-second render deadline, cancellation request, two-second settle grace, and deferred-cleanup fields compile without affecting normal finalisation.
+4. Run one single-segment recording and capture `ThumbnailHealth` to identify the native thumbnail failure stage or confirm success.
+5. Add startup cleanup for stale hidden native-finalizer candidates and then evaluate safe bounds for WinRT open/decode and FFmpeg fallback phases.
+6. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
+7. Run the 60-second mostly-static full-source and selected-area duration matrix.
+8. Validate camera, submitted A/V drift, and audio-mixer health with camera + microphone + system audio.
+9. Remove the remaining FFmpeg compatibility paths.
 
 ---
 
@@ -118,12 +119,12 @@ Every implementation update must also include the security-impact block defined 
 | CTRL-05 | ✅ | Reduce timer-driven React renders | Timer updates at 250 ms |
 | CTRL-06 | 🟡 | Encoder warm-up for first Start | Warm-up succeeded, but Start remained about 1.3 seconds and comparison/refinement remain |
 | CTRL-07 | ✅ | Pause produces independent MP4 segments | Pause/Resume architecture active |
-| CTRL-08 | 🟡 | Windows MediaComposition primary finaliser | First runtime fell back to FFmpeg; normal-path conversion, bounded open retries, per-segment metadata checks, HRESULT/stage diagnostics and render-reason reporting are implemented; rerun pending |
+| CTRL-08 | 🟡 | Windows MediaComposition primary finaliser | Normal-path conversion, bounded open retries, isolated hidden candidate output, per-segment checks, stage/HRESULT diagnostics and render-reason reporting implemented; Windows rerun pending |
 | CTRL-09 | ✅ | FFmpeg emergency concat fallback | Runtime fallback produced the final recording after native finalisation failed |
 | CTRL-10 | 🟡 | Start-stage timing breakdown | Runtime emitted Start/Resume engine totals around 1.29/1.33 seconds; internal resolve/device/audio/camera/encoder split and target improvement remain |
-| CTRL-11 | 🟡 | Stop-stage timing breakdown | Pause was 820 ms and aggregate Stop was 3974 ms; native MediaComposition now emits open/decode/append/render stage timings, with runtime evidence pending |
+| CTRL-11 | 🟡 | Stop-stage timing breakdown | Native MediaComposition emits open/decode/append/render/timeout/cancel/publish timings; FFmpeg fallback phase timing remains to be separated |
 | CTRL-12 | 🔵 | Pause/Resume without re-encoding | Timestamp rebasing/direct remux |
-| CTRL-13 | 🔵 | Bounded native finalisation timeout | Stop cannot wait indefinitely |
+| CTRL-13 | 🟡 | Bounded native finalisation timeout | MediaComposition render is polled for 20 seconds, cancellation is requested, and terminal settling is bounded to two seconds using an isolated candidate; Windows validation and bounds for open/decode/fallback remain |
 | CTRL-14 | ⚪ | Cancel while Starting | Safe cancellation |
 
 ## Health diagnostics
@@ -150,6 +151,7 @@ Every implementation update must also include the security-impact block defined 
 | HLT-18 | 🟡 | Static-tail continuity and held-frame outcome | Runtime emitted valid continuity fields and snapshots for both segments; final tails were active so `hold_needed=false`; static hold validation remains |
 | HLT-19 | 🟡 | Native finalizer stage, retry, HRESULT and render-reason diagnostics | `FinalizerHealth` implemented for destination/segment metadata, open, decode, append and render stages; Windows Pause/Resume rerun pending |
 | HLT-20 | 🟡 | Native thumbnail failure-stage and retry diagnostics | `ThumbnailHealth` implemented for WinRT open/request/read stages and asynchronous backfill; Windows single-segment and fallback-output reruns pending |
+| HLT-21 | 🟡 | Native render timeout, cancellation and isolated-candidate outcome | `FinalizerHealth` reports configured deadline, timeout, cancel request, terminal settle status, candidate publication and deferred cleanup; Windows compile/runtime validation pending |
 
 ## Recording library
 
@@ -160,7 +162,7 @@ Every implementation update must also include the security-impact block defined 
 | LIB-03 | ✅ | Rename recording | Metadata updates |
 | LIB-04 | ✅ | Delete recording | File/card removed |
 | LIB-05 | ✅ | Open recording location | Explorer selects file |
-| LIB-06 | 🟡 | Native Windows video thumbnails | First runtime failed; normal-path conversion, bounded retries, typed path-free failure stages and worker timing diagnostics are implemented; rerun pending |
+| LIB-06 | 🟡 | Native Windows video thumbnails | Normal-path conversion, bounded retries, typed path-free failure stages and worker timing diagnostics are implemented; rerun pending |
 | LIB-07 | 🟡 | Background thumbnail backfill | Per-item failure stages and generated/failed totals implemented; existing-library validation pending |
 | LIB-08 | 🔵 | Automatic UI refresh after thumbnail completion | Thumbnail appears without page restart |
 | LIB-09 | 🔵 | Search and sorting | Title/date/duration sorting |
@@ -182,7 +184,7 @@ Every implementation update must also include the security-impact block defined 
 | REL-07 | 🔵 | Window close/minimise handling | Clear error/finalised output |
 | REL-08 | 🔵 | Camera/microphone disconnect handling | No hang/corruption |
 | REL-09 | 🔵 | Low-disk-space check | Refuse safely before/during capture |
-| REL-10 | 🔵 | Orphaned segment cleanup | Stale parts removed/recovered |
+| REL-10 | 🔵 | Orphaned segment/candidate cleanup | Stale part files and hidden native-finalizer candidates removed or recovered |
 | REL-11 | 🔵 | Crash-recovery metadata | Active session journal |
 | REL-12 | ⚪ | Recover playable output after crash | Recovery workflow |
 | REL-13 | ⚪ | Diagnostic log rotation | Bounded log storage |
@@ -248,7 +250,7 @@ The detailed policy, trust boundaries, current data inventory, and mandatory sta
 | SEC-05 | 🟡 | Minimal Tauri capabilities and plugin set | Main-window core-only capability and plugin removal compile/run in Windows dev; packaged/runtime permission tests remain |
 | SEC-06 | 🟡 | Comprehensive Rust command-input validation and limits | UUID, title, FPS, device ID, output-path and settings validation added; dimensions/crops/source IDs/negative test suite remain |
 | SEC-07 | 🔵 | Remove or authenticate external executable discovery | Production never executes an unverified PATH/environment-selected FFmpeg binary |
-| SEC-08 | 🟡 | Structured diagnostic-log privacy and redaction | Provided Windows runtime confirmed structured health lines omit paths; new FinalizerHealth/ThumbnailHealth use roles, indexes, stages and HRESULTs instead of paths; free-form backend errors and future exported reports still require review |
+| SEC-08 | 🟡 | Structured diagnostic-log privacy and redaction | Structured recorder health uses roles, indexes, stages and HRESULTs instead of local paths; free-form backend errors and future exported reports still require review |
 | SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot configuration committed; first successful update/alert cycle pending |
 | SEC-10 | 🔵 | Secret scanning and repository protection | Secret scanning enabled; test secret is blocked or detected without entering history |
 | SEC-11 | ⚪ | Signed executable, installer, updater, and update metadata | Signature verification passes on a clean machine |
@@ -332,3 +334,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-30 | `cb94dd5..af4994b` | Reinterpreted timeline health from timestamp span, retained sample density separately, and removed local paths from structured capture/A-V health output; HLT-16 and SEC-08 remain 🟡 pending Windows validation |
 | 2026-07-30 | `17435c8..ca871a3` | Windows build/runtime validated encoder/WGC/control diagnostics; fixed WinRT extended-path handling for native concat/thumbnails and removed redaction-related warnings |
 | 2026-07-30 | `6090651..9520869` | Added path-free native MediaComposition stage/HRESULT diagnostics and typed thumbnail failure-stage reporting; HLT-19 and HLT-20 → 🟡 |
+| 2026-07-30 | `fcbdecb..614e176` | Added isolated candidate rendering, a 20-second MediaComposition render deadline, cancellation request, two-second settle grace and deferred-cleanup reporting; CTRL-13 and HLT-21 → 🟡 |
