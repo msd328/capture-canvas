@@ -45,6 +45,47 @@ pub(crate) fn windows_storage_path(path: &Path) -> Result<HSTRING> {
     Ok(HSTRING::from(normalized))
 }
 
+#[derive(Debug, Clone)]
+pub struct ThumbnailGenerationError {
+    pub stage: &'static str,
+    pub attempt: usize,
+    pub code: Option<String>,
+}
+
+impl ThumbnailGenerationError {
+    fn new(stage: &'static str, attempt: usize, code: Option<String>) -> Self {
+        Self {
+            stage,
+            attempt,
+            code,
+        }
+    }
+
+    #[cfg(windows)]
+    fn windows(stage: &'static str, attempt: usize, error: &windows::core::Error) -> Self {
+        Self::new(stage, attempt, Some(format!("{:?}", error.code())))
+    }
+}
+
+impl std::fmt::Display for ThumbnailGenerationError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.code.as_deref() {
+            Some(code) => write!(
+                formatter,
+                "thumbnail generation failed at stage={} attempt={} code={code}",
+                self.stage, self.attempt
+            ),
+            None => write!(
+                formatter,
+                "thumbnail generation failed at stage={} attempt={}",
+                self.stage, self.attempt
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ThumbnailGenerationError {}
+
 /// Start the one-time Media Foundation warm-up without delaying application setup.
 ///
 /// Windows often pays most of the H.264/AAC MediaTranscoder initialization cost on
@@ -220,87 +261,125 @@ pub fn thumbnail_data_url(_video_path: &Path) -> Option<String> {
     None
 }
 
+#[cfg(windows)]
+fn generate_thumbnail_attempt(
+    path: &HSTRING,
+    attempt: usize,
+) -> std::result::Result<String, ThumbnailGenerationError> {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+    use windows::Storage::FileProperties::{ThumbnailMode, ThumbnailOptions};
+    use windows::Storage::Streams::{Buffer, DataReader, InputStreamOptions};
+    use windows::Storage::StorageFile;
+
+    const REQUESTED_EDGE: u32 = 480;
+    const MAX_THUMBNAIL_BYTES: u64 = 16 * 1024 * 1024;
+
+    let file_operation = StorageFile::GetFileFromPathAsync(path)
+        .map_err(|error| ThumbnailGenerationError::windows("open_file_start", attempt, &error))?;
+    let file = file_operation
+        .get()
+        .map_err(|error| ThumbnailGenerationError::windows("open_file_wait", attempt, &error))?;
+
+    let thumbnail_operation = file
+        .GetThumbnailAsync(
+            ThumbnailMode::VideosView,
+            REQUESTED_EDGE,
+            ThumbnailOptions::UseCurrentScale,
+        )
+        .map_err(|error| {
+            ThumbnailGenerationError::windows("request_thumbnail_start", attempt, &error)
+        })?;
+    let thumbnail = thumbnail_operation.get().map_err(|error| {
+        ThumbnailGenerationError::windows("request_thumbnail_wait", attempt, &error)
+    })?;
+
+    let size = thumbnail
+        .Size()
+        .map_err(|error| ThumbnailGenerationError::windows("thumbnail_size", attempt, &error))?;
+    if size == 0 || size > MAX_THUMBNAIL_BYTES || size > u64::from(u32::MAX) {
+        let _ = thumbnail.Close();
+        return Err(ThumbnailGenerationError::new(
+            "thumbnail_size_invalid",
+            attempt,
+            Some(size.to_string()),
+        ));
+    }
+
+    let buffer = Buffer::Create(size as u32)
+        .map_err(|error| ThumbnailGenerationError::windows("create_buffer", attempt, &error))?;
+    let read_operation = thumbnail
+        .ReadAsync(&buffer, size as u32, InputStreamOptions::None)
+        .map_err(|error| {
+            ThumbnailGenerationError::windows("read_thumbnail_start", attempt, &error)
+        })?;
+    let filled = read_operation.get().map_err(|error| {
+        ThumbnailGenerationError::windows("read_thumbnail_wait", attempt, &error)
+    })?;
+    let length = filled
+        .Length()
+        .map_err(|error| ThumbnailGenerationError::windows("read_length", attempt, &error))?
+        as usize;
+    if length == 0 {
+        let _ = thumbnail.Close();
+        return Err(ThumbnailGenerationError::new(
+            "read_length_empty",
+            attempt,
+            None,
+        ));
+    }
+
+    let reader = DataReader::FromBuffer(&filled)
+        .map_err(|error| ThumbnailGenerationError::windows("create_reader", attempt, &error))?;
+    let mut bytes = vec![0u8; length];
+    reader
+        .ReadBytes(&mut bytes)
+        .map_err(|error| ThumbnailGenerationError::windows("read_bytes", attempt, &error))?;
+
+    let content_type = thumbnail
+        .ContentType()
+        .ok()
+        .map(|value| value.to_string())
+        .filter(|value| value.starts_with("image/"))
+        .unwrap_or_else(|| "image/jpeg".to_string());
+
+    let _ = reader.Close();
+    let _ = thumbnail.Close();
+    Ok(format!(
+        "data:{content_type};base64,{}",
+        STANDARD.encode(bytes)
+    ))
+}
+
 /// Extract a cached Windows video thumbnail and return it as a browser-ready data URL.
 /// This function is intentionally blocking and must only be called from a background
 /// library worker, never from Start/Pause/Resume/Stop command handling.
-pub fn generate_thumbnail_data_url(video_path: &Path) -> Option<String> {
+pub fn generate_thumbnail_data_url(
+    video_path: &Path,
+) -> std::result::Result<String, ThumbnailGenerationError> {
     #[cfg(windows)]
     {
-        use base64::engine::general_purpose::STANDARD;
-        use base64::Engine as _;
-        use windows::Storage::FileProperties::{ThumbnailMode, ThumbnailOptions};
-        use windows::Storage::Streams::{Buffer, DataReader, InputStreamOptions};
-        use windows::Storage::StorageFile;
-
-        const REQUESTED_EDGE: u32 = 480;
-        const MAX_THUMBNAIL_BYTES: u64 = 16 * 1024 * 1024;
         const RETRY_DELAYS_MS: [u64; 3] = [0, 150, 400];
 
-        let path = windows_storage_path(video_path).ok()?;
-        for delay_ms in RETRY_DELAYS_MS {
+        let path = windows_storage_path(video_path)
+            .map_err(|_| ThumbnailGenerationError::new("normalize_path", 0, None))?;
+        let mut last_error = ThumbnailGenerationError::new("unknown", 0, None);
+        for (attempt_index, delay_ms) in RETRY_DELAYS_MS.into_iter().enumerate() {
+            let attempt = attempt_index + 1;
             if delay_ms > 0 {
                 std::thread::sleep(Duration::from_millis(delay_ms));
             }
-
-            let generated = (|| -> Option<String> {
-                let file = StorageFile::GetFileFromPathAsync(&path).ok()?.get().ok()?;
-                let thumbnail = file
-                    .GetThumbnailAsync(
-                        ThumbnailMode::VideosView,
-                        REQUESTED_EDGE,
-                        ThumbnailOptions::UseCurrentScale,
-                    )
-                    .ok()?
-                    .get()
-                    .ok()?;
-
-                let size = thumbnail.Size().ok()?;
-                if size == 0 || size > MAX_THUMBNAIL_BYTES || size > u64::from(u32::MAX) {
-                    let _ = thumbnail.Close();
-                    return None;
-                }
-
-                let buffer = Buffer::Create(size as u32).ok()?;
-                let filled = thumbnail
-                    .ReadAsync(&buffer, size as u32, InputStreamOptions::None)
-                    .ok()?
-                    .get()
-                    .ok()?;
-                let length = filled.Length().ok()? as usize;
-                if length == 0 {
-                    let _ = thumbnail.Close();
-                    return None;
-                }
-
-                let reader = DataReader::FromBuffer(&filled).ok()?;
-                let mut bytes = vec![0u8; length];
-                reader.ReadBytes(&mut bytes).ok()?;
-
-                let content_type = thumbnail
-                    .ContentType()
-                    .ok()
-                    .map(|value| value.to_string())
-                    .filter(|value| value.starts_with("image/"))
-                    .unwrap_or_else(|| "image/jpeg".to_string());
-
-                let _ = reader.Close();
-                let _ = thumbnail.Close();
-                Some(format!(
-                    "data:{content_type};base64,{}",
-                    STANDARD.encode(bytes)
-                ))
-            })();
-
-            if generated.is_some() {
-                return generated;
+            match generate_thumbnail_attempt(&path, attempt) {
+                Ok(thumbnail) => return Ok(thumbnail),
+                Err(error) => last_error = error,
             }
         }
-        None
+        Err(last_error)
     }
 
     #[cfg(not(windows))]
     {
         let _ = video_path;
-        None
+        Err(ThumbnailGenerationError::new("unsupported_platform", 0, None))
     }
 }
