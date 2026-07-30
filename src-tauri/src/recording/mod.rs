@@ -8,6 +8,8 @@
 
 pub mod types;
 
+mod ffmpeg_finalizer;
+
 #[cfg(windows)]
 mod windows_media;
 
@@ -102,7 +104,7 @@ impl RecordingEngine {
                 Err(error) => {
                     let _ = video.stop();
                     let _ = fs::remove_file(&first_segment);
-                    return Err(error.context("Unable to start native Windows system-audio capture"));
+                    return Err(error.context("Unable to start native Windows system audio"));
                 }
             }
         } else {
@@ -453,7 +455,12 @@ fn mix_native_system_audio_segments(
 }
 
 fn finalize_segments(segments: &[PathBuf], final_path: &Path) -> Result<()> {
+    let total_started = Instant::now();
     if segments.is_empty() {
+        eprintln!(
+            "[Recorder][FinalizationHealth] stage=complete ok=false method=none segment_count=0 native_ms=0 fallback_ms=0 total_ms={} code=no_segments",
+            total_started.elapsed().as_millis()
+        );
         return Err(anyhow!("No recording segments were produced"));
     }
     if final_path.exists() {
@@ -466,64 +473,65 @@ fn finalize_segments(segments: &[PathBuf], final_path: &Path) -> Result<()> {
                 fs::remove_file(&segments[0])
             })
             .with_context(|| format!("Unable to move recording to {}", final_path.display()))?;
+        eprintln!(
+            "[Recorder][FinalizationHealth] stage=complete ok=true method=single_segment segment_count=1 native_ms=0 fallback_ms=0 total_ms={}",
+            total_started.elapsed().as_millis()
+        );
         return Ok(());
     }
 
     #[cfg(windows)]
-    {
+    let native_ms = {
+        let native_started = Instant::now();
         match windows_media::concatenate_segments(segments, final_path) {
             Ok(()) => {
+                let native_ms = native_started.elapsed().as_millis();
                 eprintln!(
                     "[Recorder] Native Windows MediaComposition pause/resume finalizer active"
                 );
+                eprintln!(
+                    "[Recorder][FinalizationHealth] stage=complete ok=true method=windows-mediacomposition segment_count={} native_ms={native_ms} fallback_ms=0 total_ms={}",
+                    segments.len(),
+                    total_started.elapsed().as_millis()
+                );
                 return Ok(());
             }
-            Err(error) => {
+            Err(_) => {
+                let native_ms = native_started.elapsed().as_millis();
                 eprintln!(
-                    "[Recorder] Native Windows pause/resume finalization unavailable ({error}); falling back to FFmpeg concat"
+                    "[Recorder] Native Windows pause/resume finalization unavailable; falling back to bounded FFmpeg concat"
+                );
+                eprintln!(
+                    "[Recorder][FinalizationHealth] stage=native_complete ok=false method=windows-mediacomposition segment_count={} native_ms={native_ms} total_ms={}",
+                    segments.len(),
+                    total_started.elapsed().as_millis()
                 );
                 let _ = fs::remove_file(final_path);
+                native_ms
             }
         }
-    }
+    };
+    #[cfg(not(windows))]
+    let native_ms = 0u128;
 
-    encoding::ensure_ffmpeg_available().context(
-        "Windows native pause/resume finalization failed and FFmpeg fallback is not available",
-    )?;
-
-    let list_path = final_path.with_extension("concat.txt");
-    let mut body = String::new();
-    for segment in segments {
-        let normalized = segment
-            .to_string_lossy()
-            .replace('\\', "/")
-            .replace('\'', "'\\''");
-        body.push_str(&format!("file '{normalized}'\n"));
+    let fallback_result = ffmpeg_finalizer::concatenate_segments(segments, final_path);
+    match fallback_result {
+        Ok(fallback_ms) => {
+            eprintln!(
+                "[Recorder][FinalizationHealth] stage=complete ok=true method=ffmpeg-fallback segment_count={} native_ms={native_ms} fallback_ms={fallback_ms} total_ms={}",
+                segments.len(),
+                total_started.elapsed().as_millis()
+            );
+            Ok(())
+        }
+        Err(error) => {
+            let fallback_ms = total_started.elapsed().as_millis().saturating_sub(native_ms);
+            eprintln!(
+                "[Recorder][FinalizationHealth] stage=complete ok=false method=ffmpeg-fallback segment_count={} native_ms={native_ms} fallback_ms={fallback_ms} total_ms={}",
+                segments.len(),
+                total_started.elapsed().as_millis()
+            );
+            Err(error)
+        }
     }
-    fs::write(&list_path, body).context("Unable to create FFmpeg concat list")?;
-
-    let status = encoding::ffmpeg_command()
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "warning",
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-        ])
-        .arg(&list_path)
-        .args(["-c", "copy", "-movflags", "+faststart"])
-        .arg(final_path)
-        .status()
-        .context("Unable to concatenate recording segments")?;
-    let _ = fs::remove_file(&list_path);
-    if !status.success() {
-        return Err(anyhow!(
-            "FFmpeg could not concatenate paused recording segments"
-        ));
-    }
-    Ok(())
 }
