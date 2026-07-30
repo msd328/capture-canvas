@@ -1,19 +1,29 @@
+use crate::encoding;
 use anyhow::{anyhow, Context, Result};
 use std::fs;
 use std::path::Path;
-use windows::core::HSTRING;
+use std::time::Duration;
 use windows::Media::Editing::{MediaClip, MediaComposition};
 use windows::Media::Transcoding::TranscodeFailureReason;
 use windows::Storage::StorageFile;
 
 fn storage_file(path: &Path) -> Result<StorageFile> {
-    let absolute = fs::canonicalize(path)
-        .with_context(|| format!("Unable to resolve media path {}", path.display()))?;
-    let path = HSTRING::from(absolute.to_string_lossy().as_ref());
-    StorageFile::GetFileFromPathAsync(&path)
-        .context("Unable to open media file through Windows Storage")?
-        .get()
-        .context("Windows could not open the media file")
+    let path = encoding::windows_storage_path(path)?;
+
+    // Newly finalized segment files can take a brief moment to become available
+    // through WinRT Storage APIs even though ordinary filesystem metadata is ready.
+    for delay_ms in [0u64, 100, 250] {
+        if delay_ms > 0 {
+            std::thread::sleep(Duration::from_millis(delay_ms));
+        }
+        if let Ok(operation) = StorageFile::GetFileFromPathAsync(&path) {
+            if let Ok(file) = operation.get() {
+                return Ok(file);
+            }
+        }
+    }
+
+    Err(anyhow!("Windows could not open the media file"))
 }
 
 /// Concatenate already-finalized MP4 recording segments with Windows' native
@@ -44,12 +54,12 @@ pub fn concatenate_segments(segments: &[std::path::PathBuf], final_path: &Path) 
         for segment in segments {
             let file = storage_file(segment)?;
             let clip = MediaClip::CreateFromFileAsync(&file)
-                .with_context(|| format!("Unable to load recording segment {}", segment.display()))?
+                .context("Unable to load recording segment")?
                 .get()
-                .with_context(|| format!("Windows could not decode recording segment {}", segment.display()))?;
+                .context("Windows could not decode recording segment")?;
             clips
                 .Append(&clip)
-                .with_context(|| format!("Unable to append recording segment {}", segment.display()))?;
+                .context("Unable to append recording segment")?;
         }
 
         let reason = composition
