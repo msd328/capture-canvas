@@ -64,7 +64,7 @@ The current recorder has no application account token or API credential storage.
 
 ## Current implemented desktop controls
 
-The following controls were implemented on 2026-07-29 and 2026-07-30 and remain validation-pending until the Windows build and negative tests pass:
+The following controls were implemented on 2026-07-29 and 2026-07-30 and remain validation-pending until the relevant Windows build and negative tests pass:
 
 - Production CSP blocks unapproved script, connection, frame, form, object, image, and media origins.
 - Development CSP allows only the local Tauri IPC endpoints and the localhost Vite/HMR server.
@@ -77,6 +77,8 @@ The following controls were implemented on 2026-07-29 and 2026-07-30 and remain 
 - FPS, device-ID length/content, title length/content, and output-directory settings receive Rust-side validation.
 - Background thumbnail error logs no longer include the full recording path.
 - Structured `StreamHealth`, `AvHealth`, `ControlHealth`, `ContinuityHealth`, `CameraHealth`, `AudioMixerHealth`, and capture-output warning lines omit local filesystem paths.
+- `FinalizerHealth` reports only backend, stage, role, segment index, retry attempt, elapsed time, file size, HRESULT and render-reason identifiers.
+- `ThumbnailHealth` reports only recording UUID, stage, retry attempt, elapsed time, generated/failed totals and HRESULT/status identifiers.
 
 ## Required security impact block for every implementation batch
 
@@ -100,7 +102,7 @@ Use `None` explicitly rather than omitting a field.
 
 ## Current known risks
 
-- The new CSP, security headers, and capability configuration have not yet been compile/runtime validated on Windows.
+- Development CSP and capabilities compile and run on Windows, but packaged production validation is still pending.
 - Restricted asset playback has not yet been verified against WebView2 and existing local recordings.
 - The canonical path checks narrow access to one app-approved root, but operating-system filesystem races between validation and use require further hardening for hostile same-user local processes.
 - The approved root is currently derived from the process home environment and should later use the operating system known-folder API.
@@ -108,6 +110,7 @@ Use `None` explicitly rather than omitting a field.
 - Full command validation is not complete for every dimension, crop, source identifier, and collection size.
 - FFmpeg compatibility discovery can use an environment override or PATH lookup.
 - Structured recorder health lines are path-redacted, but free-form backend errors, future crash reports, support bundles, and exported diagnostics still require a complete privacy review.
+- Finalizer and thumbnail HRESULT/stage logs require Windows runtime review to ensure platform-provided identifiers never contain unexpected user-controlled text.
 - Dependency vulnerability alerts, secret scanning, signing, updater verification, and penetration testing are not yet complete.
 
 These risks are tracked by SEC IDs in the implementation roadmap and block public production release where applicable.
@@ -224,13 +227,59 @@ Secrets involved:
 None.
 
 Security tests completed:
-Static format-string, diagnostics-boundary, and data-flow review only. Windows compile,
-runtime logs, and a scan of collected diagnostics for usernames/paths remain pending.
+Windows compilation and path-free structured StreamHealth/ContinuityHealth/ControlHealth
+runtime output were observed. Free-form error and exported-report review remains pending.
 
 Remaining risks:
 Free-form backend errors may still contain local context. Future crash reporting,
 support bundles, and exported diagnostic reports need explicit redaction. Recordings
 remain unencrypted at rest.
+```
+
+## Batch security record — 2026-07-30 finalizer and thumbnail diagnostics
+
+```text
+Security impact:
+Added path-free failure-stage observability for native segment finalisation and native
+thumbnail extraction. No media data or filesystem path is added to diagnostics.
+
+Data accessed:
+Recording-segment metadata and sizes, WinRT operation results, retry attempts, elapsed
+timing, thumbnail byte length/content type, recording UUID, and MediaComposition result.
+
+Data written:
+Existing final MP4/thumbnail metadata plus local FinalizerHealth and ThumbnailHealth
+lines and repository tracking documents.
+
+Network communication added:
+None.
+
+New permissions/capabilities:
+None.
+
+External processes:
+None added. Existing FFmpeg concat fallback remains available after native failure.
+
+Untrusted inputs:
+Generated segment files, WinRT HRESULTs/results, thumbnail streams, media metadata,
+recording UUIDs, and asynchronous worker outcomes.
+
+Validation added:
+Non-empty regular-segment checks, bounded StorageFile retries, per-stage HRESULT capture,
+MediaComposition render-reason reporting, bounded thumbnail retries, thumbnail size limits,
+empty-read rejection, typed failure propagation, and path-free worker logs.
+
+Secrets involved:
+None.
+
+Security tests completed:
+Static stage/data-flow and log-field review only. Windows compilation and runtime output
+remain pending.
+
+Remaining risks:
+The exact native MediaComposition and thumbnail failure causes are not yet known. HRESULT
+identifiers require runtime review. FFmpeg fallback still trusts current discovery rules.
+Recordings remain unencrypted at rest, and native finalisation still lacks a hard timeout.
 ```
 
 ## Vulnerability handling
