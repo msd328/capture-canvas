@@ -26,7 +26,7 @@ Every implementation update must also include the security-impact block defined 
 2. Repeat Pause/Resume and confirm normal `FinalizerHealth` output plus successful candidate publication.
 3. Run one single-segment recording and capture `ThumbnailHealth` to identify the native thumbnail failure stage or confirm success.
 4. Validate the stale/recent/final-file cleanup matrix and confirm only 24-hour-old recorder-owned temporary files are deleted.
-5. Implement safe bounds for WinRT open/decode and FFmpeg fallback phases after the CI baseline is green.
+5. Validate the new bounded WinRT open/decode stages, then add explicit timing and safe process bounds to the FFmpeg emergency concat fallback.
 6. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
 7. Run the 60-second mostly-static full-source and selected-area duration matrix.
 8. Validate camera, submitted A/V drift, and audio-mixer health with camera + microphone + system audio.
@@ -124,7 +124,7 @@ Every implementation update must also include the security-impact block defined 
 | CTRL-10 | 🟡 | Start-stage timing breakdown | Runtime emitted Start/Resume engine totals around 1.29/1.33 seconds; internal resolve/device/audio/camera/encoder split and target improvement remain |
 | CTRL-11 | 🟡 | Stop-stage timing breakdown | Native MediaComposition emits open/decode/append/render/timeout/cancel/publish timings; FFmpeg fallback phase timing remains to be separated |
 | CTRL-12 | 🔵 | Pause/Resume without re-encoding | Timestamp rebasing/direct remux |
-| CTRL-13 | 🟡 | Bounded native finalisation timeout | MediaComposition render is polled for 20 seconds, cancellation is requested, and terminal settling is bounded to two seconds using an isolated candidate; Windows validation and bounds for open/decode/fallback remain |
+| CTRL-13 | 🟡 | Bounded native finalisation timeout | StorageFile opening is bounded to 3 seconds with 1-second cancellation settling, MediaClip decoding to 8 seconds with 1-second settling, and rendering to 20 seconds with 2-second settling; Windows validation and FFmpeg process bounds remain |
 | CTRL-14 | ⚪ | Cancel while Starting | Safe cancellation |
 
 ## Health diagnostics
@@ -153,6 +153,7 @@ Every implementation update must also include the security-impact block defined 
 | HLT-20 | 🟡 | Native thumbnail failure-stage and retry diagnostics | `ThumbnailHealth` implemented for WinRT open/request/read stages and asynchronous backfill; Windows single-segment and fallback-output reruns pending |
 | HLT-21 | 🟡 | Native render timeout, cancellation and isolated-candidate outcome | `FinalizerHealth` reports configured deadline, timeout, cancel request, terminal settle status, candidate publication and deferred cleanup; Windows compile/runtime validation pending |
 | HLT-22 | 🟡 | Startup orphan-cleanup summary and safety counters | `CleanupHealth` reports bounded scan, exact matches, removals, recent/rejected entries, failures and age policy; Windows negative test pending |
+| HLT-23 | 🟡 | Native file-open and clip-decode timeout/cancellation outcome | `FinalizerHealth` reports 3-second open and 8-second decode deadlines, cancellation requests, 1-second settle results, terminal status and unsettled operations; Windows validation pending |
 
 ## Recording library
 
@@ -339,3 +340,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-30 | `fcbdecb..614e176` | Added isolated candidate rendering, a 20-second MediaComposition render deadline, cancellation request, two-second settle grace and deferred-cleanup reporting; CTRL-13 and HLT-21 → 🟡 |
 | 2026-07-30 | `de1b43a..5298720` | Added bounded background cleanup for exact UUID-named stale part/mixed/system/native-finalizer files; REL-10 and HLT-22 → 🟡 |
 | 2026-07-30 | `4b63feb` | Added a least-privilege Windows GitHub Actions gate for frozen frontend dependencies, lint/build, Rust formatting, tests and cargo check; REL-14 → 🟡 |
+| 2026-07-30 | `32ad827..a4bf436` | Bounded WinRT StorageFile open and MediaClip decode waits with cancellation settling and path-free diagnostics; CTRL-13 and HLT-23 → 🟡 |
