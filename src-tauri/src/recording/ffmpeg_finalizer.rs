@@ -17,6 +17,12 @@ enum ProcessOutcome {
         reaped: bool,
         exit_code: Option<i32>,
     },
+    InspectionFailed {
+        code: String,
+        kill_requested: bool,
+        reaped: bool,
+        exit_code: Option<i32>,
+    },
 }
 
 pub(super) fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<u128> {
@@ -113,11 +119,18 @@ pub(super) fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> R
         });
     if write_result.is_err() {
         let kill_requested = child.kill().is_ok();
-        let reaped = child.wait().is_ok();
-        let _ = fs::remove_file(&candidate_path);
+        let reaped = if kill_requested {
+            child.wait().is_ok()
+        } else {
+            child.try_wait().ok().flatten().is_some()
+        };
+        if reaped {
+            let _ = fs::remove_file(&candidate_path);
+        }
         eprintln!(
-            "[Recorder][FallbackHealth] backend=ffmpeg-concat stage=write_manifest ok=false manifest_bytes={} kill_requested={kill_requested} reaped={reaped} elapsed_ms={}",
+            "[Recorder][FallbackHealth] backend=ffmpeg-concat stage=write_manifest ok=false manifest_bytes={} kill_requested={kill_requested} reaped={reaped} cleanup_deferred={} elapsed_ms={}",
             manifest.len(),
+            !reaped,
             write_started.elapsed().as_millis()
         );
         return Err(anyhow!("Unable to submit the FFmpeg concat manifest"));
@@ -128,7 +141,7 @@ pub(super) fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> R
         write_started.elapsed().as_millis()
     );
 
-    match wait_bounded(child)? {
+    match wait_bounded(child) {
         ProcessOutcome::Exited(status) if status.success() => {
             eprintln!(
                 "[Recorder][FallbackHealth] backend=ffmpeg-concat stage=process_exit ok=true exit_code={} elapsed_ms={}",
@@ -158,13 +171,30 @@ pub(super) fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> R
             }
             eprintln!(
                 "[Recorder][FallbackHealth] backend=ffmpeg-concat stage=complete ok=false timeout_triggered=true kill_requested={kill_requested} reaped={reaped} exit_code={} cleanup_deferred={cleanup_deferred} total_ms={}",
-                exit_code
-                    .map(|code| code.to_string())
-                    .unwrap_or_else(|| "none".to_string()),
+                optional_exit_code(exit_code),
                 total_started.elapsed().as_millis()
             );
             return Err(anyhow!(
                 "FFmpeg concat fallback exceeded its bounded deadline"
+            ));
+        }
+        ProcessOutcome::InspectionFailed {
+            code,
+            kill_requested,
+            reaped,
+            exit_code,
+        } => {
+            let cleanup_deferred = !reaped;
+            if !cleanup_deferred {
+                let _ = fs::remove_file(&candidate_path);
+            }
+            eprintln!(
+                "[Recorder][FallbackHealth] backend=ffmpeg-concat stage=complete ok=false timeout_triggered=false inspection_failed=true code={code} kill_requested={kill_requested} reaped={reaped} exit_code={} cleanup_deferred={cleanup_deferred} total_ms={}",
+                optional_exit_code(exit_code),
+                total_started.elapsed().as_millis()
+            );
+            return Err(anyhow!(
+                "Unable to inspect the FFmpeg concat fallback process code={code}"
             ));
         }
     }
@@ -213,14 +243,38 @@ pub(super) fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> R
     Ok(total_ms)
 }
 
-fn wait_bounded(mut child: Child) -> Result<ProcessOutcome> {
+fn wait_bounded(mut child: Child) -> ProcessOutcome {
     let started = Instant::now();
     loop {
-        if let Some(status) = child
-            .try_wait()
-            .context("Unable to inspect the FFmpeg concat process")?
-        {
-            return Ok(ProcessOutcome::Exited(status));
+        let current_status = match child.try_wait() {
+            Ok(status) => status,
+            Err(error) => {
+                let code = format!("{:?}", error.kind());
+                let terminate_started = Instant::now();
+                let kill_requested = child.kill().is_ok();
+                let reaped_status = if kill_requested {
+                    child.wait().ok()
+                } else {
+                    child.try_wait().ok().flatten()
+                };
+                let reaped = reaped_status.is_some();
+                let exit_code = reaped_status.and_then(|status| status.code());
+                eprintln!(
+                    "[Recorder][FallbackHealth] backend=ffmpeg-concat stage=inspect_process ok=false code={code} kill_requested={kill_requested} reaped={reaped} exit_code={} elapsed_ms={}",
+                    optional_exit_code(exit_code),
+                    terminate_started.elapsed().as_millis()
+                );
+                return ProcessOutcome::InspectionFailed {
+                    code,
+                    kill_requested,
+                    reaped,
+                    exit_code,
+                };
+            }
+        };
+
+        if let Some(status) = current_status {
+            return ProcessOutcome::Exited(status);
         }
 
         if started.elapsed() >= PROCESS_TIMEOUT {
@@ -241,20 +295,24 @@ fn wait_bounded(mut child: Child) -> Result<ProcessOutcome> {
             eprintln!(
                 "[Recorder][FallbackHealth] backend=ffmpeg-concat stage=terminate ok={} kill_requested={kill_requested} reaped={reaped} exit_code={} elapsed_ms={}",
                 kill_requested && reaped,
-                exit_code
-                    .map(|code| code.to_string())
-                    .unwrap_or_else(|| "none".to_string()),
+                optional_exit_code(exit_code),
                 terminate_started.elapsed().as_millis()
             );
-            return Ok(ProcessOutcome::TimedOut {
+            return ProcessOutcome::TimedOut {
                 kill_requested,
                 reaped,
                 exit_code,
-            });
+            };
         }
 
         std::thread::sleep(PROCESS_POLL_INTERVAL);
     }
+}
+
+fn optional_exit_code(exit_code: Option<i32>) -> String {
+    exit_code
+        .map(|code| code.to_string())
+        .unwrap_or_else(|| "none".to_string())
 }
 
 fn candidate_path(final_path: &Path) -> PathBuf {
