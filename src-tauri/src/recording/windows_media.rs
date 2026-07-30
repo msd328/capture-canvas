@@ -3,10 +3,10 @@ use anyhow::{anyhow, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use windows::Foundation::AsyncStatus;
 use windows::Media::Editing::{MediaClip, MediaComposition};
 use windows::Media::Transcoding::TranscodeFailureReason;
 use windows::Storage::StorageFile;
+use windows_future::AsyncStatus;
 
 const STORAGE_RETRY_DELAYS_MS: [u64; 4] = [0, 100, 250, 500];
 const MOVE_RETRY_DELAYS_MS: [u64; 4] = [0, 50, 150, 300];
