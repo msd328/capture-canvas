@@ -22,11 +22,11 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Rebuild the latest branch and confirm one path-free `CleanupHealth` startup line.
-2. Run the stale/recent/final-file cleanup matrix and validate that only 24-hour-old recorder-owned temporary files are deleted.
-3. Repeat Pause/Resume and confirm normal `FinalizerHealth` output plus successful candidate publication.
-4. Run one single-segment recording and capture `ThumbnailHealth` to identify the native thumbnail failure stage or confirm success.
-5. Evaluate safe bounds for WinRT open/decode and FFmpeg fallback phases after cleanup validation.
+1. Run the new Windows CI gate and resolve any frontend, formatting, test, dependency-lock or Windows compilation failures.
+2. Repeat Pause/Resume and confirm normal `FinalizerHealth` output plus successful candidate publication.
+3. Run one single-segment recording and capture `ThumbnailHealth` to identify the native thumbnail failure stage or confirm success.
+4. Validate the stale/recent/final-file cleanup matrix and confirm only 24-hour-old recorder-owned temporary files are deleted.
+5. Implement safe bounds for WinRT open/decode and FFmpeg fallback phases after the CI baseline is green.
 6. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
 7. Run the 60-second mostly-static full-source and selected-area duration matrix.
 8. Validate camera, submitted A/V drift, and audio-mixer health with camera + microphone + system audio.
@@ -189,6 +189,7 @@ Every implementation update must also include the security-impact block defined 
 | REL-11 | 🔵 | Crash-recovery metadata | Active session journal |
 | REL-12 | ⚪ | Recover playable output after crash | Recovery workflow |
 | REL-13 | ⚪ | Diagnostic log rotation | Bounded log storage |
+| REL-14 | 🟡 | Windows CI build/test gate | GitHub Actions runs frozen Bun install, frontend lint/build, Rust formatting, tests and Windows cargo check; first green run pending |
 
 ## Desktop UX
 
@@ -252,7 +253,7 @@ The detailed policy, trust boundaries, current data inventory, and mandatory sta
 | SEC-06 | 🟡 | Comprehensive Rust command-input validation and limits | UUID, title, FPS, device ID, output-path and settings validation added; dimensions/crops/source IDs/negative test suite remain |
 | SEC-07 | 🔵 | Remove or authenticate external executable discovery | Production never executes an unverified PATH/environment-selected FFmpeg binary |
 | SEC-08 | 🟡 | Structured diagnostic-log privacy and redaction | Structured recorder health uses roles, indexes, stages and HRESULTs instead of local paths; free-form backend errors and future exported reports still require review |
-| SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot configuration committed; first successful update/alert cycle pending |
+| SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot plus Windows CI validation are configured; first successful update/alert and CI cycle pending |
 | SEC-10 | 🔵 | Secret scanning and repository protection | Secret scanning enabled; test secret is blocked or detected without entering history |
 | SEC-11 | ⚪ | Signed executable, installer, updater, and update metadata | Signature verification passes on a clean machine |
 | SEC-12 | ⚪ | OS secure storage for future account tokens | Tokens use Windows Credential Manager/macOS Keychain and never JSON/localStorage/logs |
@@ -337,3 +338,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-30 | `6090651..9520869` | Added path-free native MediaComposition stage/HRESULT diagnostics and typed thumbnail failure-stage reporting; HLT-19 and HLT-20 → 🟡 |
 | 2026-07-30 | `fcbdecb..614e176` | Added isolated candidate rendering, a 20-second MediaComposition render deadline, cancellation request, two-second settle grace and deferred-cleanup reporting; CTRL-13 and HLT-21 → 🟡 |
 | 2026-07-30 | `de1b43a..5298720` | Added bounded background cleanup for exact UUID-named stale part/mixed/system/native-finalizer files; REL-10 and HLT-22 → 🟡 |
+| 2026-07-30 | `4b63feb` | Added a least-privilege Windows GitHub Actions gate for frozen frontend dependencies, lint/build, Rust formatting, tests and cargo check; REL-14 → 🟡 |
