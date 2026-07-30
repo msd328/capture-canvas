@@ -15,7 +15,7 @@ No software can promise that attacks or data leakage are impossible. The project
 - System/desktop audio.
 - Camera frames.
 - Completed MP4 recordings and temporary recording segments.
-- Hidden native-finalizer candidate MP4 files that may temporarily remain after an unsettled cancellation.
+- Hidden native-finalizer and FFmpeg-finalizer candidate MP4 files that may temporarily remain after an unsettled cancellation, failed termination, or failed publication.
 - Source preview images and generated video thumbnails.
 
 ### Local metadata
@@ -65,7 +65,7 @@ The current recorder has no application account token or API credential storage.
 
 ## Current implemented desktop controls
 
-The following controls were implemented on 2026-07-29 and 2026-07-30 and remain validation-pending until the relevant Windows build and negative tests pass:
+The following controls were implemented from 2026-07-29 through 2026-07-31 and remain validation-pending until the relevant Windows build and negative tests pass:
 
 - Production CSP blocks unapproved script, connection, frame, form, object, image, and media origins.
 - Development CSP allows only the local Tauri IPC endpoints and the localhost Vite/HMR server.
@@ -81,8 +81,10 @@ The following controls were implemented on 2026-07-29 and 2026-07-30 and remain 
 - `FinalizerHealth` reports only backend, stage, role, segment index, retry attempt, elapsed time, file size, HRESULT, timeout/cancellation state and render-reason identifiers.
 - `ThumbnailHealth` reports only recording UUID, stage, retry attempt, elapsed time, generated/failed totals and HRESULT/status identifiers.
 - Native MediaComposition renders into a hidden unique candidate rather than the final recording path, preventing a timed-out WinRT operation and FFmpeg fallback from writing the same destination concurrently.
-- Native rendering uses a fixed 20-second deadline and two-second cancellation-settle grace; an unsettled candidate is not deleted while Windows may still own it.
-- Startup cleanup scans only direct children of the approved Recordings root, recognises exact canonical UUID-based part/mixed/system/native-finalizer names, rejects links/non-regular files, applies a 24-hour age gate, limits each scan to 4,096 entries, and emits path-free aggregate `CleanupHealth` output.
+- Native StorageFile open, MediaClip decode and MediaComposition render waits have fixed deadlines with cancellation-settle handling.
+- The emergency FFmpeg concat fallback receives its manifest through standard input, writes only to a hidden unique candidate, has a fixed 120-second process deadline, requests termination and reaps the child on timeout, validates the candidate, and publishes through bounded same-directory rename retries.
+- `FallbackHealth` and `FinalizationHealth` expose only process/candidate stage, counts, timing, exit/termination state, file size and publication outcome; they do not include paths or manifest content.
+- Startup cleanup scans only direct children of the approved Recordings root, recognises exact canonical UUID-based part/mixed/system/native-finalizer/FFmpeg-finalizer names, rejects links/non-regular files, applies a 24-hour age gate, limits each scan to 4,096 entries, and emits path-free aggregate `CleanupHealth` output.
 
 ## Required security impact block for every implementation batch
 
@@ -112,11 +114,12 @@ Use `None` explicitly rather than omitting a field.
 - The approved root is currently derived from the process home environment and should later use the operating system known-folder API.
 - Metadata and recordings are not encrypted at rest.
 - Full command validation is not complete for every dimension, crop, source identifier, and collection size.
-- FFmpeg compatibility discovery can use an environment override or PATH lookup.
+- FFmpeg compatibility discovery can use an environment override, adjacent executable, or PATH lookup and remains a production executable-trust risk.
 - Structured recorder health lines are path-redacted, but free-form backend errors, future crash reports, support bundles, and exported diagnostics still require a complete privacy review.
 - Finalizer and thumbnail HRESULT/stage logs require Windows runtime review to ensure platform-provided identifiers never contain unexpected user-controlled text.
 - Startup orphan cleanup is implemented but still requires a Windows stale/recent/final-file negative test. It intentionally retains matching files younger than 24 hours and remains subject to same-user filesystem races between metadata inspection and deletion.
-- The MediaComposition render phase is bounded, but WinRT file-open/clip-decode waits and FFmpeg fallback execution are not yet hard-bounded.
+- Native StorageFile open, MediaClip decode, MediaComposition render and emergency FFmpeg concat are bounded in code, but forced timeout/cancellation, process termination, candidate publication and playback require Windows runtime validation.
+- The external system-audio compatibility mixer still uses an older unbounded FFmpeg process path.
 - Dependency vulnerability alerts, secret scanning, signing, updater verification, and penetration testing are not yet complete.
 
 These risks are tracked by SEC IDs in the implementation roadmap and block public production release where applicable.
@@ -331,8 +334,8 @@ Static control-flow, destination-isolation, cleanup and structured-log review on
 Remaining risks:
 Windows compilation/runtime validation remains required. An unsettled cancellation can leave
 a hidden candidate containing captured content until the background startup cleanup reaches
-the 24-hour age threshold. WinRT open/decode waits and FFmpeg fallback are not yet hard-bounded.
-Recordings remain unencrypted at rest.
+the 24-hour age threshold. At the time of this batch, WinRT open/decode waits and FFmpeg
+fallback were not yet hard-bounded. Recordings remain unencrypted at rest.
 ```
 
 ## Batch security record — 2026-07-30 stale artifact cleanup
@@ -378,6 +381,59 @@ Remaining risks:
 A same-user process can race an entry between metadata inspection and deletion. Cleanup
 does not recover playable segments or remove matching files younger than 24 hours.
 Recordings remain unencrypted at rest.
+```
+
+## Batch security record — 2026-07-31 bounded FFmpeg finalizer
+
+```text
+Security impact:
+Isolated the emergency FFmpeg concat writer from the final recording path, removed the
+on-disk path-bearing concat manifest, bounded process execution, and added path-free
+process/publication diagnostics.
+
+Data accessed:
+Generated MP4 segment files, segment metadata and sizes, monotonic timing, child-process
+status/exit code, and the final UUID filename used to derive a hidden candidate.
+
+Data written:
+An in-memory concat manifest, a hidden FFmpeg candidate MP4, the final MP4 after successful
+same-directory publication, path-free FallbackHealth/FinalizationHealth lines, cleanup
+parser tests and repository tracking documents.
+
+Network communication added:
+None.
+
+New permissions/capabilities:
+None.
+
+External processes:
+The existing FFmpeg emergency concat process remains. It now has a 120-second deadline,
+termination request and child reap. No new executable is introduced.
+
+Untrusted inputs:
+Generated segment files and metadata, local filesystem results, FFmpeg process results and
+exit codes, timestamps, and the currently configured FFmpeg executable selection.
+
+Validation added:
+Non-empty regular-segment checks, stdin-only manifest submission, isolated unpredictable
+candidate naming, bounded process polling, timeout termination/reap reporting, candidate
+regular-file/non-empty validation, bounded same-directory publication retries, post-success
+segment cleanup, and exact stale-candidate parser coverage.
+
+Secrets involved:
+None.
+
+Security tests completed:
+Static process-ownership, output-isolation, manifest-lifetime, candidate-publication,
+cleanup-pattern and structured-log review. Windows compilation and runtime validation
+remain pending.
+
+Remaining risks:
+FFmpeg executable discovery still trusts an environment override, an adjacent executable
+or PATH and remains tracked by SEC-07. External system-audio compatibility mixing still
+uses an older unbounded FFmpeg process path. A failed termination request may leave an
+isolated hidden candidate until startup cleanup after the 24-hour age threshold. Recordings
+remain unencrypted at rest.
 ```
 
 ## Vulnerability handling
