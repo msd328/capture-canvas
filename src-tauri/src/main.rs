@@ -19,6 +19,11 @@ use state::AppState;
 fn main() {
     tauri::Builder::default()
         .setup(|_| {
+            // Remove abandoned recorder-owned temporary media without delaying the
+            // UI thread. A conservative age gate protects active work from another
+            // Recorder process while clearing stale crash/finalizer artifacts.
+            security::cleanup_stale_recording_artifacts_async();
+
             // Media Foundation normally pays a large one-time codec startup cost on
             // the first recording. Exercise the native H.264/AAC path in a background
             // thread while the frontend is loading so Start remains responsive.
