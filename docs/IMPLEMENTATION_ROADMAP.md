@@ -22,15 +22,16 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Run the new Windows CI gate and resolve any frontend, formatting, test, dependency-lock or Windows compilation failures.
-2. Repeat Pause/Resume and confirm normal `FinalizerHealth` output plus successful candidate publication.
-3. Run one single-segment recording and capture `ThumbnailHealth` to identify the native thumbnail failure stage or confirm success.
-4. Validate the stale/recent/final-file cleanup matrix and confirm only 24-hour-old recorder-owned temporary files are deleted.
-5. Validate the new bounded WinRT open/decode stages, then add explicit timing and safe process bounds to the FFmpeg emergency concat fallback.
-6. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
-7. Run the 60-second mostly-static full-source and selected-area duration matrix.
-8. Validate camera, submitted A/V drift, and audio-mixer health with camera + microphone + system audio.
-9. Remove the remaining FFmpeg compatibility paths.
+1. Pull and rebuild after the bounded-wait warning-scope update, then run `scripts/windows-local-check.ps1`.
+2. Check the first Windows CI run and resolve any frontend, formatting, test, dependency-lock or Windows compilation failures.
+3. Repeat Pause/Resume and confirm normal `FinalizerHealth` output plus successful candidate publication.
+4. Run one single-segment recording and capture `ThumbnailHealth` to identify the native thumbnail failure stage or confirm success.
+5. Validate the stale/recent/final-file cleanup matrix and confirm only 24-hour-old recorder-owned temporary files are deleted.
+6. Add explicit timing, isolated candidate publication and safe process bounds to the FFmpeg emergency concat fallback.
+7. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
+8. Run the 60-second mostly-static full-source and selected-area duration matrix.
+9. Validate camera, submitted A/V drift, and audio-mixer health with camera + microphone + system audio.
+10. Remove the remaining FFmpeg compatibility paths.
 
 ---
 
@@ -124,7 +125,7 @@ Every implementation update must also include the security-impact block defined 
 | CTRL-10 | 🟡 | Start-stage timing breakdown | Runtime emitted Start/Resume engine totals around 1.29/1.33 seconds; internal resolve/device/audio/camera/encoder split and target improvement remain |
 | CTRL-11 | 🟡 | Stop-stage timing breakdown | Native MediaComposition emits open/decode/append/render/timeout/cancel/publish timings; FFmpeg fallback phase timing remains to be separated |
 | CTRL-12 | 🔵 | Pause/Resume without re-encoding | Timestamp rebasing/direct remux |
-| CTRL-13 | 🟡 | Bounded native finalisation timeout | StorageFile opening is bounded to 3 seconds with 1-second cancellation settling, MediaClip decoding to 8 seconds with 1-second settling, and rendering to 20 seconds with 2-second settling; Windows validation and FFmpeg process bounds remain |
+| CTRL-13 | 🟡 | Bounded native finalisation timeout | StorageFile open, MediaClip decode and MediaComposition render bounds compile and Recorder starts on Windows; forced timeout/cancellation runtime evidence and FFmpeg process bounds remain |
 | CTRL-14 | ⚪ | Cancel while Starting | Safe cancellation |
 
 ## Health diagnostics
@@ -151,9 +152,9 @@ Every implementation update must also include the security-impact block defined 
 | HLT-18 | 🟡 | Static-tail continuity and held-frame outcome | Runtime emitted valid continuity fields and snapshots for both segments; final tails were active so `hold_needed=false`; static hold validation remains |
 | HLT-19 | 🟡 | Native finalizer stage, retry, HRESULT and render-reason diagnostics | `FinalizerHealth` implemented for destination/segment metadata, open, decode, append and render stages; Windows Pause/Resume rerun pending |
 | HLT-20 | 🟡 | Native thumbnail failure-stage and retry diagnostics | `ThumbnailHealth` implemented for WinRT open/request/read stages and asynchronous backfill; Windows single-segment and fallback-output reruns pending |
-| HLT-21 | 🟡 | Native render timeout, cancellation and isolated-candidate outcome | `FinalizerHealth` reports configured deadline, timeout, cancel request, terminal settle status, candidate publication and deferred cleanup; Windows compile/runtime validation pending |
+| HLT-21 | 🟡 | Native render timeout, cancellation and isolated-candidate outcome | Windows compiler accepted render timeout/cancellation fields and Recorder started; forced-timeout, cancellation-settle and publication runtime evidence remain pending |
 | HLT-22 | 🟡 | Startup orphan-cleanup summary and safety counters | `CleanupHealth` reports bounded scan, exact matches, removals, recent/rejected entries, failures and age policy; Windows negative test pending |
-| HLT-23 | 🟡 | Native file-open and clip-decode timeout/cancellation outcome | `FinalizerHealth` reports 3-second open and 8-second decode deadlines, cancellation requests, 1-second settle results, terminal status and unsettled operations; Windows validation pending |
+| HLT-23 | 🟡 | Native file-open and clip-decode timeout/cancellation outcome | Windows compiler accepted bounded open/decode waits and diagnostics; forced timeout/cancellation runtime evidence remains pending |
 
 ## Recording library
 
@@ -186,11 +187,11 @@ Every implementation update must also include the security-impact block defined 
 | REL-07 | 🔵 | Window close/minimise handling | Clear error/finalised output |
 | REL-08 | 🔵 | Camera/microphone disconnect handling | No hang/corruption |
 | REL-09 | 🔵 | Low-disk-space check | Refuse safely before/during capture |
-| REL-10 | 🟡 | Orphaned segment/candidate cleanup | Background startup scan removes only exact UUID-named part/mixed/system/native-finalizer files older than 24 hours; Windows stale/recent/final-file matrix pending |
+| REL-10 | 🟡 | Orphaned segment/candidate cleanup | Windows startup observed `scanned=2 matched=2 recent=2 removed=0`, preserving both recent artifacts; stale/recent/final-file deletion matrix remains pending |
 | REL-11 | 🔵 | Crash-recovery metadata | Active session journal |
 | REL-12 | ⚪ | Recover playable output after crash | Recovery workflow |
 | REL-13 | ⚪ | Diagnostic log rotation | Bounded log storage |
-| REL-14 | 🟡 | Windows CI build/test gate | GitHub Actions runs frozen Bun install, frontend lint/build, Rust formatting, tests and Windows cargo check; first green run pending |
+| REL-14 | 🟡 | Windows CI build/test gate | GitHub Actions is configured and `scripts/windows-local-check.ps1` mirrors its commands locally; first green hosted run pending |
 
 ## Desktop UX
 
@@ -341,3 +342,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-30 | `de1b43a..5298720` | Added bounded background cleanup for exact UUID-named stale part/mixed/system/native-finalizer files; REL-10 and HLT-22 → 🟡 |
 | 2026-07-30 | `4b63feb` | Added a least-privilege Windows GitHub Actions gate for frozen frontend dependencies, lint/build, Rust formatting, tests and cargo check; REL-14 → 🟡 |
 | 2026-07-30 | `32ad827..a4bf436` | Bounded WinRT StorageFile open and MediaClip decode waits with cancellation settling and path-free diagnostics; CTRL-13 and HLT-23 → 🟡 |
+| 2026-07-30 | `34ea234..7e750d5` | Added a local Windows validation script, scoped the known macro warning expectation, and recorded bounded-wait compile plus recent-artifact evidence; CTRL-13, HLT-21/23, REL-10 and REL-14 remain 🟡 |
