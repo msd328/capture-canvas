@@ -10,8 +10,11 @@ use windows_future::AsyncStatus;
 
 const STORAGE_RETRY_DELAYS_MS: [u64; 4] = [0, 100, 250, 500];
 const MOVE_RETRY_DELAYS_MS: [u64; 4] = [0, 50, 150, 300];
+const STORAGE_OPEN_TIMEOUT: Duration = Duration::from_secs(3);
+const CLIP_DECODE_TIMEOUT: Duration = Duration::from_secs(8);
 const RENDER_TIMEOUT: Duration = Duration::from_secs(20);
-const CANCELLATION_GRACE: Duration = Duration::from_secs(2);
+const OPERATION_CANCELLATION_GRACE: Duration = Duration::from_secs(1);
+const RENDER_CANCELLATION_GRACE: Duration = Duration::from_secs(2);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 fn error_code(error: &windows::core::Error) -> String {
@@ -41,10 +44,218 @@ fn log_stage(
     );
 }
 
+enum AsyncOperationOutcome<T> {
+    Completed {
+        value: T,
+        timeout_triggered: bool,
+    },
+    Failed {
+        terminal_status: &'static str,
+        code: String,
+        timeout_triggered: bool,
+    },
+    UnsettledTimeout {
+        cancel_requested: bool,
+        last_status: String,
+    },
+}
+
+macro_rules! wait_bounded_async {
+    (
+        $operation:expr,
+        timeout = $timeout:expr,
+        grace = $grace:expr,
+        stage = $stage:expr,
+        role = $role:expr,
+        segment_index = $segment_index:expr,
+        attempt = $attempt:expr
+    ) => {{
+        let operation = &$operation;
+        let timeout = $timeout;
+        let grace = $grace;
+        let stage: &str = $stage;
+        let role: &str = $role;
+        let segment_index: Option<usize> = $segment_index;
+        let attempt: Option<usize> = $attempt;
+        let wait_started = Instant::now();
+        let mut timeout_triggered = false;
+
+        'operation_wait: loop {
+            let status = match operation.Status() {
+                Ok(status) => status,
+                Err(error) => {
+                    let code = error_code(&error);
+                    log_stage(
+                        &format!("{stage}_status"),
+                        false,
+                        role,
+                        segment_index,
+                        attempt,
+                        wait_started.elapsed().as_millis(),
+                        Some(&code),
+                    );
+                    break 'operation_wait AsyncOperationOutcome::UnsettledTimeout {
+                        cancel_requested: false,
+                        last_status: format!("status_error:{code}"),
+                    };
+                }
+            };
+
+            if status == AsyncStatus::Completed {
+                match operation.GetResults() {
+                    Ok(value) => {
+                        break 'operation_wait AsyncOperationOutcome::Completed {
+                            value,
+                            timeout_triggered,
+                        };
+                    }
+                    Err(error) => {
+                        break 'operation_wait AsyncOperationOutcome::Failed {
+                            terminal_status: "result_error",
+                            code: error_code(&error),
+                            timeout_triggered,
+                        };
+                    }
+                }
+            }
+            if status == AsyncStatus::Canceled {
+                break 'operation_wait AsyncOperationOutcome::Failed {
+                    terminal_status: "canceled",
+                    code: "none".to_string(),
+                    timeout_triggered,
+                };
+            }
+            if status == AsyncStatus::Error {
+                let code = operation
+                    .ErrorCode()
+                    .map(|value| format!("{value:?}"))
+                    .unwrap_or_else(|_| "unknown".to_string());
+                break 'operation_wait AsyncOperationOutcome::Failed {
+                    terminal_status: "error",
+                    code,
+                    timeout_triggered,
+                };
+            }
+
+            if wait_started.elapsed() >= timeout {
+                timeout_triggered = true;
+                eprintln!(
+                    "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage={stage}_timeout ok=false role={role} segment_index={} attempt={} elapsed_ms={} timeout_ms={}",
+                    optional_usize(segment_index),
+                    optional_usize(attempt),
+                    wait_started.elapsed().as_millis(),
+                    timeout.as_millis(),
+                );
+
+                let cancel_started = Instant::now();
+                let cancel_result = operation.Cancel();
+                let cancel_requested = cancel_result.is_ok();
+                let cancel_code = cancel_result.err().map(|error| error_code(&error));
+                log_stage(
+                    &format!("{stage}_cancel"),
+                    cancel_requested,
+                    role,
+                    segment_index,
+                    attempt,
+                    cancel_started.elapsed().as_millis(),
+                    cancel_code.as_deref(),
+                );
+
+                loop {
+                    let status = match operation.Status() {
+                        Ok(status) => status,
+                        Err(error) => {
+                            let code = error_code(&error);
+                            break 'operation_wait AsyncOperationOutcome::UnsettledTimeout {
+                                cancel_requested,
+                                last_status: format!("status_error:{code}"),
+                            };
+                        }
+                    };
+
+                    if status == AsyncStatus::Completed {
+                        let result = operation.GetResults();
+                        eprintln!(
+                            "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage={stage}_cancel_settle ok={} role={role} segment_index={} attempt={} terminal_status=completed elapsed_ms={}",
+                            result.is_ok(),
+                            optional_usize(segment_index),
+                            optional_usize(attempt),
+                            cancel_started.elapsed().as_millis(),
+                        );
+                        match result {
+                            Ok(value) => {
+                                break 'operation_wait AsyncOperationOutcome::Completed {
+                                    value,
+                                    timeout_triggered: true,
+                                };
+                            }
+                            Err(error) => {
+                                break 'operation_wait AsyncOperationOutcome::Failed {
+                                    terminal_status: "result_error",
+                                    code: error_code(&error),
+                                    timeout_triggered: true,
+                                };
+                            }
+                        }
+                    }
+                    if status == AsyncStatus::Canceled {
+                        eprintln!(
+                            "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage={stage}_cancel_settle ok=true role={role} segment_index={} attempt={} terminal_status=canceled elapsed_ms={}",
+                            optional_usize(segment_index),
+                            optional_usize(attempt),
+                            cancel_started.elapsed().as_millis(),
+                        );
+                        break 'operation_wait AsyncOperationOutcome::Failed {
+                            terminal_status: "canceled",
+                            code: "none".to_string(),
+                            timeout_triggered: true,
+                        };
+                    }
+                    if status == AsyncStatus::Error {
+                        let code = operation
+                            .ErrorCode()
+                            .map(|value| format!("{value:?}"))
+                            .unwrap_or_else(|_| "unknown".to_string());
+                        eprintln!(
+                            "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage={stage}_cancel_settle ok=true role={role} segment_index={} attempt={} terminal_status=error elapsed_ms={} hresult={code}",
+                            optional_usize(segment_index),
+                            optional_usize(attempt),
+                            cancel_started.elapsed().as_millis(),
+                        );
+                        break 'operation_wait AsyncOperationOutcome::Failed {
+                            terminal_status: "error",
+                            code,
+                            timeout_triggered: true,
+                        };
+                    }
+                    if cancel_started.elapsed() >= grace {
+                        eprintln!(
+                            "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage={stage}_cancel_settle ok=false role={role} segment_index={} attempt={} terminal_status=started elapsed_ms={} grace_ms={} operation_unsettled=true",
+                            optional_usize(segment_index),
+                            optional_usize(attempt),
+                            cancel_started.elapsed().as_millis(),
+                            grace.as_millis(),
+                        );
+                        break 'operation_wait AsyncOperationOutcome::UnsettledTimeout {
+                            cancel_requested,
+                            last_status: "started".to_string(),
+                        };
+                    }
+
+                    std::thread::sleep(STATUS_POLL_INTERVAL);
+                }
+            }
+
+            std::thread::sleep(STATUS_POLL_INTERVAL);
+        }
+    }};
+}
+
 fn storage_file(
     path: &Path,
     role: &'static str,
     segment_index: Option<usize>,
+    cleanup_deferred: &mut bool,
 ) -> Result<StorageFile> {
     let normalize_started = Instant::now();
     let path = match encoding::windows_storage_path(path) {
@@ -86,34 +297,8 @@ fn storage_file(
         }
 
         let started = Instant::now();
-        match StorageFile::GetFileFromPathAsync(&path) {
-            Ok(operation) => match operation.get() {
-                Ok(file) => {
-                    log_stage(
-                        "open_file",
-                        true,
-                        role,
-                        segment_index,
-                        Some(attempt),
-                        started.elapsed().as_millis(),
-                        None,
-                    );
-                    return Ok(file);
-                }
-                Err(error) => {
-                    last_stage = "open_file_wait";
-                    last_code = error_code(&error);
-                    log_stage(
-                        last_stage,
-                        false,
-                        role,
-                        segment_index,
-                        Some(attempt),
-                        started.elapsed().as_millis(),
-                        Some(&last_code),
-                    );
-                }
-            },
+        let operation = match StorageFile::GetFileFromPathAsync(&path) {
+            Ok(operation) => operation,
             Err(error) => {
                 last_stage = "open_file_start";
                 last_code = error_code(&error);
@@ -126,6 +311,60 @@ fn storage_file(
                     started.elapsed().as_millis(),
                     Some(&last_code),
                 );
+                continue;
+            }
+        };
+
+        let outcome = wait_bounded_async!(
+            operation,
+            timeout = STORAGE_OPEN_TIMEOUT,
+            grace = OPERATION_CANCELLATION_GRACE,
+            stage = "open_file",
+            role = role,
+            segment_index = segment_index,
+            attempt = Some(attempt)
+        );
+        let _ = operation.Close();
+
+        match outcome {
+            AsyncOperationOutcome::Completed {
+                value,
+                timeout_triggered,
+            } => {
+                eprintln!(
+                    "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=open_file ok=true role={role} segment_index={} attempt={attempt} elapsed_ms={} timeout_triggered={timeout_triggered}",
+                    optional_usize(segment_index),
+                    started.elapsed().as_millis(),
+                );
+                return Ok(value);
+            }
+            AsyncOperationOutcome::Failed {
+                terminal_status,
+                code,
+                timeout_triggered,
+            } => {
+                last_stage = "open_file_wait";
+                last_code = code;
+                eprintln!(
+                    "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage={last_stage} ok=false role={role} segment_index={} attempt={attempt} elapsed_ms={} terminal_status={terminal_status} timeout_triggered={timeout_triggered} hresult={last_code}",
+                    optional_usize(segment_index),
+                    started.elapsed().as_millis(),
+                );
+                if timeout_triggered {
+                    break;
+                }
+            }
+            AsyncOperationOutcome::UnsettledTimeout {
+                cancel_requested,
+                last_status,
+            } => {
+                if role == "destination" {
+                    *cleanup_deferred = true;
+                }
+                return Err(anyhow!(
+                    "Windows media file open exceeded its bounded deadline role={role} segment_index={} cancel_requested={cancel_requested} last_status={last_status}",
+                    optional_usize(segment_index)
+                ));
             }
         }
     }
@@ -199,25 +438,19 @@ fn move_candidate_to_final(candidate: &Path, final_path: &Path) -> Result<()> {
     ))
 }
 
-enum RenderOutcome {
-    Completed(TranscodeFailureReason),
-    Failed(anyhow::Error),
-    UnsettledTimeout {
-        cancel_requested: bool,
-        last_status: String,
-    },
-}
-
 /// Concatenate already-finalized MP4 recording segments with Windows' native
 /// media-editing pipeline. MediaComposition owns the timeline so paused wall-clock
 /// time is not present in the resulting file.
 pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<()> {
     let total_started = Instant::now();
     eprintln!(
-        "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=begin ok=true segment_count={} render_timeout_ms={} cancellation_grace_ms={}",
+        "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=begin ok=true segment_count={} open_timeout_ms={} decode_timeout_ms={} render_timeout_ms={} operation_cancellation_grace_ms={} render_cancellation_grace_ms={}",
         segments.len(),
+        STORAGE_OPEN_TIMEOUT.as_millis(),
+        CLIP_DECODE_TIMEOUT.as_millis(),
         RENDER_TIMEOUT.as_millis(),
-        CANCELLATION_GRACE.as_millis(),
+        OPERATION_CANCELLATION_GRACE.as_millis(),
+        RENDER_CANCELLATION_GRACE.as_millis(),
     );
 
     if segments.len() < 2 {
@@ -280,7 +513,12 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
 
     let mut cleanup_deferred = false;
     let result = (|| -> Result<()> {
-        let destination = storage_file(&candidate_path, "destination", None)?;
+        let destination = storage_file(
+            &candidate_path,
+            "destination",
+            None,
+            &mut cleanup_deferred,
+        )?;
 
         let composition_started = Instant::now();
         let composition = MediaComposition::new().map_err(|error| {
@@ -331,7 +569,7 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
         );
 
         for (index, segment) in segments.iter().enumerate() {
-            let file = storage_file(segment, "segment", Some(index))?;
+            let file = storage_file(segment, "segment", Some(index), &mut cleanup_deferred)?;
 
             let decode_started = Instant::now();
             let operation = MediaClip::CreateFromFileAsync(&file).map_err(|error| {
@@ -349,30 +587,50 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
                     "Unable to start decoding recording segment_index={index} hresult={code}"
                 )
             })?;
-            let clip = operation.get().map_err(|error| {
-                let code = error_code(&error);
-                log_stage(
-                    "decode_segment_wait",
-                    false,
-                    "segment",
-                    Some(index),
-                    None,
-                    decode_started.elapsed().as_millis(),
-                    Some(&code),
-                );
-                anyhow!(
-                    "Windows could not decode recording segment_index={index} hresult={code}"
-                )
-            })?;
-            log_stage(
-                "decode_segment",
-                true,
-                "segment",
-                Some(index),
-                None,
-                decode_started.elapsed().as_millis(),
-                None,
+            let outcome = wait_bounded_async!(
+                operation,
+                timeout = CLIP_DECODE_TIMEOUT,
+                grace = OPERATION_CANCELLATION_GRACE,
+                stage = "decode_segment",
+                role = "segment",
+                segment_index = Some(index),
+                attempt = None
             );
+            let _ = operation.Close();
+
+            let clip = match outcome {
+                AsyncOperationOutcome::Completed {
+                    value,
+                    timeout_triggered,
+                } => {
+                    eprintln!(
+                        "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=decode_segment ok=true role=segment segment_index={index} attempt=none elapsed_ms={} timeout_triggered={timeout_triggered}",
+                        decode_started.elapsed().as_millis(),
+                    );
+                    value
+                }
+                AsyncOperationOutcome::Failed {
+                    terminal_status,
+                    code,
+                    timeout_triggered,
+                } => {
+                    eprintln!(
+                        "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=decode_segment_wait ok=false role=segment segment_index={index} attempt=none elapsed_ms={} terminal_status={terminal_status} timeout_triggered={timeout_triggered} hresult={code}",
+                        decode_started.elapsed().as_millis(),
+                    );
+                    return Err(anyhow!(
+                        "Windows could not decode recording segment_index={index} terminal_status={terminal_status} hresult={code}"
+                    ));
+                }
+                AsyncOperationOutcome::UnsettledTimeout {
+                    cancel_requested,
+                    last_status,
+                } => {
+                    return Err(anyhow!(
+                        "Windows segment decoding exceeded its bounded deadline segment_index={index} cancel_requested={cancel_requested} last_status={last_status}"
+                    ));
+                }
+            };
 
             let append_started = Instant::now();
             clips.Append(&clip).map_err(|error| {
@@ -425,152 +683,24 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
             None,
         );
 
-        let mut timeout_triggered = false;
-        let outcome = 'render_wait: loop {
-            let status = match render.Status() {
-                Ok(status) => status,
-                Err(error) => {
-                    let code = error_code(&error);
-                    log_stage(
-                        "render_status",
-                        false,
-                        "destination",
-                        None,
-                        None,
-                        render_started.elapsed().as_millis(),
-                        Some(&code),
-                    );
-                    break 'render_wait RenderOutcome::UnsettledTimeout {
-                        cancel_requested: false,
-                        last_status: format!("status_error:{code}"),
-                    };
-                }
-            };
-
-            if status == AsyncStatus::Completed {
-                let reason = match render.GetResults() {
-                    Ok(reason) => reason,
-                    Err(error) => {
-                        let code = error_code(&error);
-                        break 'render_wait RenderOutcome::Failed(anyhow!(
-                            "Windows media finalization result failed hresult={code}"
-                        ));
-                    }
-                };
-                break 'render_wait RenderOutcome::Completed(reason);
-            }
-            if status == AsyncStatus::Canceled {
-                break 'render_wait RenderOutcome::Failed(anyhow!(
-                    "Windows media finalization was canceled"
-                ));
-            }
-            if status == AsyncStatus::Error {
-                let code = render
-                    .ErrorCode()
-                    .map(|value| format!("{value:?}"))
-                    .unwrap_or_else(|_| "unknown".to_string());
-                break 'render_wait RenderOutcome::Failed(anyhow!(
-                    "Windows media finalization entered error state hresult={code}"
-                ));
-            }
-
-            if render_started.elapsed() >= RENDER_TIMEOUT {
-                timeout_triggered = true;
-                eprintln!(
-                    "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=render_timeout ok=false role=destination elapsed_ms={} timeout_ms={}",
-                    render_started.elapsed().as_millis(),
-                    RENDER_TIMEOUT.as_millis()
-                );
-
-                let cancel_started = Instant::now();
-                let cancel_result = render.Cancel();
-                let cancel_requested = cancel_result.is_ok();
-                let cancel_code = cancel_result.err().map(|error| error_code(&error));
-                log_stage(
-                    "cancel_render",
-                    cancel_requested,
-                    "destination",
-                    None,
-                    None,
-                    cancel_started.elapsed().as_millis(),
-                    cancel_code.as_deref(),
-                );
-
-                loop {
-                    let status = match render.Status() {
-                        Ok(status) => status,
-                        Err(error) => {
-                            let code = error_code(&error);
-                            break 'render_wait RenderOutcome::UnsettledTimeout {
-                                cancel_requested,
-                                last_status: format!("status_error:{code}"),
-                            };
-                        }
-                    };
-
-                    if status == AsyncStatus::Completed {
-                        let reason = match render.GetResults() {
-                            Ok(reason) => reason,
-                            Err(error) => {
-                                let code = error_code(&error);
-                                break 'render_wait RenderOutcome::Failed(anyhow!(
-                                    "Windows media finalization result failed after timeout hresult={code}"
-                                ));
-                            }
-                        };
-                        eprintln!(
-                            "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=cancel_settle ok=true role=destination terminal_status=completed elapsed_ms={}",
-                            cancel_started.elapsed().as_millis()
-                        );
-                        break 'render_wait RenderOutcome::Completed(reason);
-                    }
-                    if status == AsyncStatus::Canceled {
-                        eprintln!(
-                            "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=cancel_settle ok=true role=destination terminal_status=canceled elapsed_ms={}",
-                            cancel_started.elapsed().as_millis()
-                        );
-                        break 'render_wait RenderOutcome::Failed(anyhow!(
-                            "Windows media finalization timed out and was canceled"
-                        ));
-                    }
-                    if status == AsyncStatus::Error {
-                        let code = render
-                            .ErrorCode()
-                            .map(|value| format!("{value:?}"))
-                            .unwrap_or_else(|_| "unknown".to_string());
-                        eprintln!(
-                            "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=cancel_settle ok=true role=destination terminal_status=error elapsed_ms={} hresult={code}",
-                            cancel_started.elapsed().as_millis()
-                        );
-                        break 'render_wait RenderOutcome::Failed(anyhow!(
-                            "Windows media finalization timed out then entered error state hresult={code}"
-                        ));
-                    }
-                    if cancel_started.elapsed() >= CANCELLATION_GRACE {
-                        eprintln!(
-                            "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=cancel_settle ok=false role=destination terminal_status=started elapsed_ms={} grace_ms={} cleanup_deferred=true",
-                            cancel_started.elapsed().as_millis(),
-                            CANCELLATION_GRACE.as_millis()
-                        );
-                        break 'render_wait RenderOutcome::UnsettledTimeout {
-                            cancel_requested,
-                            last_status: "started".to_string(),
-                        };
-                    }
-
-                    std::thread::sleep(STATUS_POLL_INTERVAL);
-                }
-            }
-
-            std::thread::sleep(STATUS_POLL_INTERVAL);
-        };
-
+        let outcome = wait_bounded_async!(
+            render,
+            timeout = RENDER_TIMEOUT,
+            grace = RENDER_CANCELLATION_GRACE,
+            stage = "render",
+            role = "destination",
+            segment_index = None,
+            attempt = None
+        );
         let _ = render.Close();
         drop(render);
         drop(destination);
 
         match outcome {
-            RenderOutcome::Completed(reason) if reason == TranscodeFailureReason::None => {
+            AsyncOperationOutcome::Completed {
+                value: reason,
+                timeout_triggered,
+            } if reason == TranscodeFailureReason::None => {
                 eprintln!(
                     "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=render_result ok=true role=destination elapsed_ms={} reason={reason:?} timeout_triggered={timeout_triggered}",
                     render_started.elapsed().as_millis()
@@ -578,7 +708,10 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
                 move_candidate_to_final(&candidate_path, final_path)?;
                 Ok(())
             }
-            RenderOutcome::Completed(reason) => {
+            AsyncOperationOutcome::Completed {
+                value: reason,
+                timeout_triggered,
+            } => {
                 eprintln!(
                     "[Recorder][FinalizerHealth] backend=windows-mediacomposition stage=render_result ok=false role=destination elapsed_ms={} reason={reason:?} timeout_triggered={timeout_triggered}",
                     render_started.elapsed().as_millis()
@@ -587,8 +720,14 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
                     "Windows media finalization rejected recording segments reason={reason:?}"
                 ))
             }
-            RenderOutcome::Failed(error) => Err(error),
-            RenderOutcome::UnsettledTimeout {
+            AsyncOperationOutcome::Failed {
+                terminal_status,
+                code,
+                timeout_triggered,
+            } => Err(anyhow!(
+                "Windows media finalization failed terminal_status={terminal_status} timeout_triggered={timeout_triggered} hresult={code}"
+            )),
+            AsyncOperationOutcome::UnsettledTimeout {
                 cancel_requested,
                 last_status,
             } => {
