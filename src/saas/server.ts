@@ -1,5 +1,7 @@
 import {
+  CreateUploadSessionRequestSchema,
   MAX_RECORDING_UPLOAD_BYTES,
+  MAX_UPLOAD_REQUEST_BYTES,
   SAAS_API_VERSION,
   SaasCapabilitiesSchema,
   type SaasApiError,
@@ -13,18 +15,26 @@ type ServerGlobal = typeof globalThis & {
   process?: { env?: ServerEnvironment };
 };
 
-function responseHeaders(): Headers {
-  return new Headers({
+type BoundedJsonResult =
+  | { ok: true; value: unknown }
+  | { ok: false; response: Response };
+
+function responseHeaders(extra?: HeadersInit): Headers {
+  const headers = new Headers({
     "cache-control": "no-store",
     "content-type": "application/json; charset=utf-8",
     "x-content-type-options": "nosniff",
   });
+  if (extra) {
+    new Headers(extra).forEach((value, key) => headers.set(key, value));
+  }
+  return headers;
 }
 
-function jsonResponse(body: unknown, status = 200): Response {
+function jsonResponse(body: unknown, status = 200, extraHeaders?: HeadersInit): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: responseHeaders(),
+    headers: responseHeaders(extraHeaders),
   });
 }
 
@@ -36,6 +46,7 @@ function errorResponse(
   status: number,
   code: SaasApiError["error"]["code"],
   message: string,
+  extraHeaders?: HeadersInit,
 ): Response {
   return jsonResponse(
     {
@@ -46,6 +57,7 @@ function errorResponse(
       },
     } satisfies SaasApiError,
     status,
+    extraHeaders,
   );
 }
 
@@ -109,6 +121,158 @@ function capabilities(env: unknown) {
   });
 }
 
+function parseContentLength(request: Request): number | null | Response {
+  const raw = request.headers.get("content-length");
+  if (raw === null) return null;
+
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    return errorResponse(400, "bad_request", "Invalid Content-Length header.");
+  }
+  if (parsed > MAX_UPLOAD_REQUEST_BYTES) {
+    return errorResponse(
+      413,
+      "payload_too_large",
+      "Upload-session request exceeds the allowed size.",
+    );
+  }
+  return parsed;
+}
+
+async function readBoundedJson(request: Request): Promise<BoundedJsonResult> {
+  const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  if (contentType !== "application/json") {
+    return {
+      ok: false,
+      response: errorResponse(
+        415,
+        "unsupported_media_type",
+        "Upload-session requests must use application/json.",
+      ),
+    };
+  }
+
+  const declaredLength = parseContentLength(request);
+  if (declaredLength instanceof Response) {
+    return { ok: false, response: declaredLength };
+  }
+
+  if (!request.body) {
+    return {
+      ok: false,
+      response: errorResponse(400, "bad_request", "A JSON request body is required."),
+    };
+  }
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      received += value.byteLength;
+      if (received > MAX_UPLOAD_REQUEST_BYTES) {
+        await reader.cancel("request body limit exceeded").catch(() => undefined);
+        return {
+          ok: false,
+          response: errorResponse(
+            413,
+            "payload_too_large",
+            "Upload-session request exceeds the allowed size.",
+          ),
+        };
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return {
+      ok: false,
+      response: errorResponse(400, "bad_request", "Unable to read the request body."),
+    };
+  }
+
+  if (declaredLength !== null && declaredLength !== received) {
+    return {
+      ok: false,
+      response: errorResponse(400, "bad_request", "Request body length does not match Content-Length."),
+    };
+  }
+
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return {
+      ok: false,
+      response: errorResponse(400, "bad_request", "Request body must be valid UTF-8."),
+    };
+  }
+
+  try {
+    return { ok: true, value: JSON.parse(text) as unknown };
+  } catch {
+    return {
+      ok: false,
+      response: errorResponse(400, "bad_request", "Request body must contain valid JSON."),
+    };
+  }
+}
+
+async function handleUploadSessionRequest(request: Request, env: unknown): Promise<Response> {
+  if (request.method !== "POST") {
+    return errorResponse(
+      405,
+      "method_not_allowed",
+      "Upload sessions must be created with POST.",
+      { allow: "POST, OPTIONS" },
+    );
+  }
+
+  const body = await readBoundedJson(request);
+  if (!body.ok) return body.response;
+
+  const parsedRequest = CreateUploadSessionRequestSchema.safeParse(body.value);
+  if (!parsedRequest.success) {
+    return errorResponse(
+      400,
+      "bad_request",
+      "Upload-session request does not match the required contract.",
+    );
+  }
+
+  const current = capabilities(env);
+  if (parsedRequest.data.fileSizeBytes > current.uploads.maxUploadBytes) {
+    return errorResponse(
+      413,
+      "payload_too_large",
+      "Recording exceeds the configured upload limit.",
+    );
+  }
+
+  if (!current.configured) {
+    return errorResponse(
+      503,
+      "not_configured",
+      "Recorder cloud authentication and upload storage are not configured.",
+    );
+  }
+
+  return errorResponse(
+    501,
+    "not_implemented",
+    "Authenticated upload-session creation is not implemented yet.",
+  );
+}
+
 export async function handleSaasApiRequest(
   request: Request,
   env: unknown,
@@ -130,6 +294,7 @@ export async function handleSaasApiRequest(
     return new Response(null, {
       status: 204,
       headers: new Headers({
+        "allow": "GET, POST, OPTIONS",
         "cache-control": "no-store",
         "x-content-type-options": "nosniff",
       }),
@@ -137,19 +302,7 @@ export async function handleSaasApiRequest(
   }
 
   if (url.pathname === `${API_PREFIX}/upload-sessions`) {
-    const current = capabilities(env);
-    if (!current.configured) {
-      return errorResponse(
-        503,
-        "not_configured",
-        "Recorder cloud authentication and upload storage are not configured.",
-      );
-    }
-    return errorResponse(
-      501,
-      "not_implemented",
-      "Authenticated upload-session creation is not implemented yet.",
-    );
+    return handleUploadSessionRequest(request, env);
   }
 
   return errorResponse(404, "not_found", "SaaS API route not found.");
