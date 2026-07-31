@@ -273,7 +273,7 @@ The mid-August target is a focused desktop + SaaS MVP. Authentication, secure de
 | ID | Status | Work |
 |---|---:|---|
 | SAAS-01 | 🟡 | Provider-neutral OIDC/PKCE, capability, visibility and upload metadata contracts; provider selection and native token exchange pending |
-| SAAS-02 | 🟡 | Windows Credential Manager readiness/status/clear boundary; Windows validation and real login integration pending |
+| SAAS-02 | 🟡 | Windows Credential Manager readiness/status/clear boundary and failure-isolated Settings UI; Windows validation and real login integration pending |
 | SAAS-03 | 🟡 | Resumable uploads | Strict upload-session contract and fail-closed API route exist; authenticated object-storage adapter pending |
 | SAAS-04 | 🔵 | Upload progress/retry |
 | SAAS-05 | 🔵 | Shareable links |
@@ -352,3 +352,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-31 | `51baedd..fa7e0e9` | Added bounded library revision snapshots, persisted-change notifications and automatic UI refresh; LIB-08 and HLT-25 → 🟡 pending Windows validation |
 | 2026-07-31 | `da131b3..0f83836` | Added provider-neutral OIDC/upload contracts, disabled-by-default SaaS configuration, Windows Credential Manager readiness commands and Settings UI; LIB-08 → ✅, SAAS-01/02, SEC-12 and HLT-26 → 🟡 |
 | 2026-07-31 | `b219b02..2a20e70` | Added versioned SaaS API contracts, fail-closed health/capability routing and a reserved upload-session boundary; SAAS-03/06/08 → 🟡 pending build/runtime and authenticated-adapter validation |
+| 2026-07-31 | `71c4bf3..03146e1` | Isolated secure-auth readiness failures from recorder/device settings; SAAS-02 remains 🟡 pending Windows compile and Credential Manager probe evidence |
