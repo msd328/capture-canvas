@@ -8,18 +8,63 @@ use crate::{
     recording::{types::*, RecordingEngine},
     security,
 };
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Condvar, Mutex, RwLock};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
+
+const LIBRARY_UPDATE_WAIT: Duration = Duration::from_secs(25);
 
 #[derive(Debug)]
+struct LibraryRevision {
+    value: Mutex<u64>,
+    changed: Condvar,
+}
+
+impl LibraryRevision {
+    fn new() -> Self {
+        Self {
+            value: Mutex::new(1),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn current(&self) -> u64 {
+        *self.value.lock()
+    }
+
+    fn bump(&self) -> u64 {
+        let mut value = self.value.lock();
+        *value = value.saturating_add(1);
+        let revision = *value;
+        self.changed.notify_all();
+        revision
+    }
+
+    fn wait_for_change(&self, after_revision: u64) {
+        let mut value = self.value.lock();
+        if *value <= after_revision {
+            self.changed.wait_for(&mut value, LIBRARY_UPDATE_WAIT);
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibrarySnapshot {
+    pub revision: u64,
+    pub recordings: Vec<RecordingOutput>,
+}
+
+#[derive(Clone, Debug)]
 pub struct LibraryStore {
     pub recordings: Arc<RwLock<Vec<RecordingOutput>>>,
     path: PathBuf,
     persist_lock: Arc<Mutex<()>>,
+    revision: Arc<LibraryRevision>,
 }
 
 impl LibraryStore {
@@ -43,6 +88,7 @@ impl LibraryStore {
             recordings: Arc::new(RwLock::new(recordings)),
             path,
             persist_lock: Arc::new(Mutex::new(())),
+            revision: Arc::new(LibraryRevision::new()),
         };
         let _ = store.persist();
         store.refresh_thumbnails_async();
@@ -52,6 +98,35 @@ impl LibraryStore {
     pub fn persist(&self) -> Result<(), String> {
         let _persist_guard = self.persist_lock.lock();
         write_json(&self.path, &*self.recordings.read())
+    }
+
+    pub fn persist_and_notify(&self, reason: &'static str) -> Result<u64, String> {
+        self.persist()?;
+        Ok(self.notify_changed(reason))
+    }
+
+    pub fn snapshot(&self) -> LibrarySnapshot {
+        // Read the revision first. If a writer changes the recordings after this
+        // read, its later revision bump makes the next wait return immediately.
+        let revision = self.revision.current();
+        let recordings = self.recordings.read().clone();
+        LibrarySnapshot {
+            revision,
+            recordings,
+        }
+    }
+
+    pub fn wait_for_update(&self, after_revision: u64) -> LibrarySnapshot {
+        self.revision.wait_for_change(after_revision);
+        self.snapshot()
+    }
+
+    fn notify_changed(&self, reason: &'static str) -> u64 {
+        let revision = self.revision.bump();
+        eprintln!(
+            "[Recorder][LibraryHealth] stage=notify reason={reason} revision={revision}"
+        );
+        revision
     }
 
     /// Generate one newly completed recording's thumbnail without extending the
@@ -67,9 +142,7 @@ impl LibraryStore {
                 return;
             }
         };
-        let recordings = Arc::clone(&self.recordings);
-        let metadata_path = self.path.clone();
-        let persist_lock = Arc::clone(&self.persist_lock);
+        let store = self.clone();
         let worker_id = id.clone();
         let spawn_result = std::thread::Builder::new()
             .name("recorder-thumbnail".to_string())
@@ -90,7 +163,7 @@ impl LibraryStore {
                 };
 
                 let changed = {
-                    let mut guard = recordings.write();
+                    let mut guard = store.recordings.write();
                     let Some(recording) = guard
                         .iter_mut()
                         .find(|recording| recording.id == worker_id)
@@ -110,13 +183,13 @@ impl LibraryStore {
                 };
 
                 if changed {
-                    let _persist_guard = persist_lock.lock();
-                    if let Err(error) = write_json(&metadata_path, &*recordings.read()) {
+                    if let Err(error) = store.persist() {
                         eprintln!(
                             "[Recorder][ThumbnailHealth] ok=false id={worker_id} stage=persist attempt=0 code={error} thumbnail_ms={}",
                             started.elapsed().as_millis()
                         );
                     } else {
+                        store.notify_changed("thumbnail_ready");
                         eprintln!(
                             "[Recorder][ThumbnailHealth] ok=true id={worker_id} stage=complete attempt=0 code=none thumbnail_ms={}",
                             started.elapsed().as_millis()
@@ -156,9 +229,7 @@ impl LibraryStore {
             return;
         }
 
-        let recordings = Arc::clone(&self.recordings);
-        let metadata_path = self.path.clone();
-        let persist_lock = Arc::clone(&self.persist_lock);
+        let store = self.clone();
         let spawn_result = std::thread::Builder::new()
             .name("recorder-thumbnail-backfill".to_string())
             .spawn(move || {
@@ -178,7 +249,7 @@ impl LibraryStore {
                             continue;
                         }
                     };
-                    let mut guard = recordings.write();
+                    let mut guard = store.recordings.write();
                     if let Some(recording) = guard.iter_mut().find(|recording| recording.id == id) {
                         if recording.thumbnail_data_url.is_none() {
                             recording.thumbnail_data_url = Some(thumbnail);
@@ -188,12 +259,12 @@ impl LibraryStore {
                 }
 
                 if generated > 0 {
-                    let _persist_guard = persist_lock.lock();
-                    if let Err(error) = write_json(&metadata_path, &*recordings.read()) {
+                    if let Err(error) = store.persist() {
                         eprintln!(
                             "[Recorder][ThumbnailHealth] ok=false stage=backfill_persist generated={generated} failed={failed} code={error}"
                         );
                     } else {
+                        store.notify_changed("thumbnail_backfill");
                         eprintln!(
                             "[Recorder][ThumbnailHealth] ok=true stage=backfill_complete generated={generated} failed={failed} code=none"
                         );
