@@ -3,28 +3,62 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-Write-Host "[RecorderCheck] Installing locked frontend dependencies"
-bun install --frozen-lockfile
+function Invoke-RecorderCheckStep {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Label,
 
-Write-Host "[RecorderCheck] Linting frontend"
-bun run lint
+        [Parameter(Mandatory = $true)]
+        [scriptblock]$Command,
 
-Write-Host "[RecorderCheck] Building frontend"
-bun run build
+        [string]$FailureHint = ""
+    )
+
+    Write-Host "[RecorderCheck] $Label"
+    & $Command
+    $exitCode = $LASTEXITCODE
+    if ($null -eq $exitCode) {
+        $exitCode = 0
+    }
+    if ($exitCode -ne 0) {
+        Write-Host "[RecorderCheck] FAILED: $Label (exit code $exitCode)" -ForegroundColor Red
+        if (-not [string]::IsNullOrWhiteSpace($FailureHint)) {
+            Write-Host "[RecorderCheck] $FailureHint" -ForegroundColor Yellow
+        }
+        exit $exitCode
+    }
+}
+
+Invoke-RecorderCheckStep `
+    -Label "Installing locked frontend dependencies" `
+    -Command { bun install --frozen-lockfile }
+
+Invoke-RecorderCheckStep `
+    -Label "Linting frontend" `
+    -Command { bun run lint } `
+    -FailureHint "For Prettier or 'Delete CR' errors, run 'bun run format', review 'git diff', then rerun this script."
+
+Invoke-RecorderCheckStep `
+    -Label "Building frontend" `
+    -Command { bun run build }
 
 Push-Location (Join-Path $repoRoot "src-tauri")
 try {
-    Write-Host "[RecorderCheck] Checking Rust formatting"
-    cargo fmt --all -- --check
+    Invoke-RecorderCheckStep `
+        -Label "Checking Rust formatting" `
+        -Command { cargo fmt --all -- --check } `
+        -FailureHint "Run 'cargo fmt --all' from src-tauri, review the diff, then rerun this script."
 
-    Write-Host "[RecorderCheck] Running Rust tests"
-    cargo test --no-default-features --locked
+    Invoke-RecorderCheckStep `
+        -Label "Running Rust tests" `
+        -Command { cargo test --no-default-features --locked }
 
-    Write-Host "[RecorderCheck] Checking Windows recorder"
-    cargo check --no-default-features --locked
+    Invoke-RecorderCheckStep `
+        -Label "Checking Windows recorder" `
+        -Command { cargo check --no-default-features --locked }
 }
 finally {
     Pop-Location
 }
 
-Write-Host "[RecorderCheck] All local validation steps passed"
+Write-Host "[RecorderCheck] All local validation steps passed" -ForegroundColor Green
