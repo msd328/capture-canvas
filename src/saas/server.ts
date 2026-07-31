@@ -9,6 +9,7 @@ import {
 
 const API_PREFIX = `/api/${SAAS_API_VERSION}`;
 const MIN_CONFIGURED_UPLOAD_BYTES = 1024 * 1024;
+const UPLOAD_REQUEST_READ_TIMEOUT_MS = 10_000;
 
 type ServerEnvironment = Record<string, string | undefined>;
 type ServerGlobal = typeof globalThis & {
@@ -31,7 +32,11 @@ function responseHeaders(extra?: HeadersInit): Headers {
   return headers;
 }
 
-function jsonResponse(body: unknown, status = 200, extraHeaders?: HeadersInit): Response {
+function jsonResponse(
+  body: unknown,
+  status = 200,
+  extraHeaders?: HeadersInit,
+): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: responseHeaders(extraHeaders),
@@ -139,8 +144,43 @@ function parseContentLength(request: Request): number | null | Response {
   return parsed;
 }
 
+function readWithDeadline(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  deadline: number,
+): Promise<ReadableStreamReadResult<Uint8Array> | null> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return Promise.resolve(null);
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const timeout = globalThis.setTimeout(() => {
+      settled = true;
+      resolve(null);
+    }, remaining);
+
+    reader.read().then(
+      (result) => {
+        if (settled) return;
+        settled = true;
+        globalThis.clearTimeout(timeout);
+        resolve(result);
+      },
+      (error: unknown) => {
+        if (settled) return;
+        settled = true;
+        globalThis.clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
+}
+
 async function readBoundedJson(request: Request): Promise<BoundedJsonResult> {
-  const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
+  const contentType = request.headers
+    .get("content-type")
+    ?.split(";", 1)[0]
+    ?.trim()
+    .toLowerCase();
   if (contentType !== "application/json") {
     return {
       ok: false,
@@ -148,6 +188,21 @@ async function readBoundedJson(request: Request): Promise<BoundedJsonResult> {
         415,
         "unsupported_media_type",
         "Upload-session requests must use application/json.",
+      ),
+    };
+  }
+
+  const contentEncoding = request.headers
+    .get("content-encoding")
+    ?.trim()
+    .toLowerCase();
+  if (contentEncoding && contentEncoding !== "identity") {
+    return {
+      ok: false,
+      response: errorResponse(
+        415,
+        "unsupported_media_type",
+        "Compressed upload-session requests are not supported.",
       ),
     };
   }
@@ -160,19 +215,36 @@ async function readBoundedJson(request: Request): Promise<BoundedJsonResult> {
   if (!request.body) {
     return {
       ok: false,
-      response: errorResponse(400, "bad_request", "A JSON request body is required."),
+      response: errorResponse(
+        400,
+        "bad_request",
+        "A JSON request body is required.",
+      ),
     };
   }
 
   const reader = request.body.getReader();
+  const deadline = Date.now() + UPLOAD_REQUEST_READ_TIMEOUT_MS;
   const chunks: Uint8Array[] = [];
   let received = 0;
 
   try {
     while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      received += value.byteLength;
+      const result = await readWithDeadline(reader, deadline);
+      if (!result) {
+        await reader.cancel("request body deadline exceeded").catch(() => undefined);
+        return {
+          ok: false,
+          response: errorResponse(
+            408,
+            "request_timeout",
+            "Upload-session request body was not received in time.",
+          ),
+        };
+      }
+
+      if (result.done) break;
+      received += result.value.byteLength;
       if (received > MAX_UPLOAD_REQUEST_BYTES) {
         await reader.cancel("request body limit exceeded").catch(() => undefined);
         return {
@@ -184,19 +256,27 @@ async function readBoundedJson(request: Request): Promise<BoundedJsonResult> {
           ),
         };
       }
-      chunks.push(value);
+      chunks.push(result.value);
     }
   } catch {
     return {
       ok: false,
-      response: errorResponse(400, "bad_request", "Unable to read the request body."),
+      response: errorResponse(
+        400,
+        "bad_request",
+        "Unable to read the request body.",
+      ),
     };
   }
 
   if (declaredLength !== null && declaredLength !== received) {
     return {
       ok: false,
-      response: errorResponse(400, "bad_request", "Request body length does not match Content-Length."),
+      response: errorResponse(
+        400,
+        "bad_request",
+        "Request body length does not match Content-Length.",
+      ),
     };
   }
 
@@ -213,7 +293,11 @@ async function readBoundedJson(request: Request): Promise<BoundedJsonResult> {
   } catch {
     return {
       ok: false,
-      response: errorResponse(400, "bad_request", "Request body must be valid UTF-8."),
+      response: errorResponse(
+        400,
+        "bad_request",
+        "Request body must be valid UTF-8.",
+      ),
     };
   }
 
@@ -222,12 +306,19 @@ async function readBoundedJson(request: Request): Promise<BoundedJsonResult> {
   } catch {
     return {
       ok: false,
-      response: errorResponse(400, "bad_request", "Request body must contain valid JSON."),
+      response: errorResponse(
+        400,
+        "bad_request",
+        "Request body must contain valid JSON.",
+      ),
     };
   }
 }
 
-async function handleUploadSessionRequest(request: Request, env: unknown): Promise<Response> {
+async function handleUploadSessionRequest(
+  request: Request,
+  env: unknown,
+): Promise<Response> {
   if (request.method !== "POST") {
     return errorResponse(
       405,
@@ -294,7 +385,7 @@ export async function handleSaasApiRequest(
     return new Response(null, {
       status: 204,
       headers: new Headers({
-        "allow": "GET, POST, OPTIONS",
+        allow: "GET, POST, OPTIONS",
         "cache-control": "no-store",
         "x-content-type-options": "nosniff",
       }),
