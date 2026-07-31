@@ -119,6 +119,8 @@ export const SaasApiErrorSchema = z
       .object({
         code: z.enum([
           "bad_request",
+          "method_not_allowed",
+          "unsupported_media_type",
           "not_authenticated",
           "not_authorized",
           "not_found",
