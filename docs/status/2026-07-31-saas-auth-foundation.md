@@ -39,6 +39,7 @@ This batch establishes the first provider-neutral SaaS and native-auth boundary 
 - Added a secure-storage readiness button.
 - Added local-session status and a clear-session action.
 - The panel explicitly states that identity-provider and API endpoints are not configured for the desktop client.
+- Secure-auth status is loaded separately from device and recorder settings. A Credential Manager status failure shows a retryable cloud-readiness error without blocking the rest of the Settings page.
 
 ## Network and CSP boundary
 
@@ -67,7 +68,7 @@ The Settings page should show `Windows Credential Manager ready` and `No cloud s
 ```text
 LIB-08   ✅  Automatic Library refresh confirmed working by the user on Windows
 SAAS-01  🟡  OIDC/PKCE and capability contracts implemented; provider and exchange runtime pending
-SAAS-02  🟡  Windows secure-store status/probe/clear boundary implemented; Windows compile/probe and real login integration pending
+SAAS-02  🟡  Windows secure-store status/probe/clear boundary and failure-isolated Settings UI implemented; Windows compile/probe and real login integration pending
 SAAS-03  🟡  Bounded resumable upload-session contract and fail-closed endpoint reserved; authenticated storage adapter pending
 SAAS-06  🟡  Private/unlisted/public contract implemented; server-side authorisation pending
 SAAS-08  🟡  Cloud recording metadata contract implemented; persistence and cloud library pending
@@ -79,7 +80,7 @@ HLT-26   🟡  Path-free AuthHealth status/probe/clear diagnostics implemented; 
 
 ```text
 Security impact:
-Added a native secret-storage boundary for future authentication, strict shared SaaS contracts, and fail-closed same-origin capability endpoints. No real credential is accepted by the current Tauri command surface, and upload creation does not yet accept media or issue a signed URL.
+Added a native secret-storage boundary for future authentication, strict shared SaaS contracts, fail-closed same-origin capability endpoints, and failure isolation so secure-store errors cannot disable unrelated recorder settings. No real credential is accepted by the current Tauri command surface, and upload creation does not yet accept media or issue a signed URL.
 
 Data accessed:
 A fixed Recorder-owned generic credential target in the current Windows user's Credential Manager, random probe bytes, non-secret settings UI state, deployment configuration used only to compute capabilities, request method/path, and future upload metadata contract fields.
@@ -100,13 +101,13 @@ Untrusted inputs:
 Future OIDC callback values, upload metadata, environment configuration, Credential Manager records, and `/api/v1` request method/path. Zod contracts bound string lengths, UUIDs, URLs, sizes, duration, hashes and header values. Current upload-session handling consumes no request body. Native status/clear/probe commands accept no user-provided secret or credential target.
 
 Validation added:
-A random secure-store round-trip probe; a Rust credential-size unit test; strict SaaS schemas; HTTPS-only configuration detection; fail-closed capability/upload behavior; no-store JSON; `nosniff`; and non-secret AuthHealth diagnostics.
+A random secure-store round-trip probe; a Rust credential-size unit test; strict SaaS schemas; HTTPS-only configuration detection; fail-closed capability/upload behavior; no-store JSON; `nosniff`; non-secret AuthHealth diagnostics; and independent loading/error handling for recorder settings versus secure-auth status.
 
 Secrets involved:
 Only random probe bytes in the native batch. Future refresh tokens are designated for the fixed Windows Credential Manager target and must never be returned to React, JSON, localStorage, logs or URLs. Deployment configuration values are never returned by capability responses.
 
 Security tests completed:
-Static review of fixed credential targets, secret-return prevention, probe cleanup ordering, Credential Manager buffer freeing, size limits, path-free logs, environment-value non-disclosure, SSR route isolation, fail-closed uploads and unchanged desktop CSP.
+Static review of fixed credential targets, secret-return prevention, probe cleanup ordering, Credential Manager buffer freeing, size limits, path-free logs, environment-value non-disclosure, SSR route isolation, fail-closed uploads, unchanged desktop CSP, and secure-store failure isolation in the Settings page.
 
 Remaining risks:
 Windows compilation and Credential Manager runtime behaviour remain unvalidated. A failed credential deletion can leave random probe bytes under the dedicated probe target. OIDC state/nonce/PKCE generation, callback interception, token exchange, signature/issuer/audience verification, refresh rotation, logout revocation, API-origin allowlisting, database tenancy, upload signing, object-key ownership, request-body enforcement, quotas and rate limits are not implemented. Credential Manager protects data within the Windows account boundary but does not protect against a process already running as the same user. macOS secure storage remains unsupported.
