@@ -3,6 +3,7 @@ import type {
   CapturePreview,
   CaptureTarget,
   DisplayInfo,
+  LibrarySnapshot,
   MicrophoneInfo,
   RecorderSettings,
   RecordingConfig,
@@ -76,6 +77,16 @@ export const stopRecording = () =>
 
 export const getRecordings = () =>
   call<RecordingOutput[]>("get_recordings", undefined, () => mock.getRecordings());
+export const getLibrarySnapshot = () =>
+  call<LibrarySnapshot>("get_library_snapshot", undefined, async () => ({
+    revision: 0,
+    recordings: await mock.getRecordings(),
+  }));
+export const waitForLibraryUpdate = (afterRevision: number) =>
+  call<LibrarySnapshot>("wait_for_library_update", { afterRevision }, async () => ({
+    revision: afterRevision,
+    recordings: await mock.getRecordings(),
+  }));
 export const getRecording = (id: string) =>
   call<RecordingOutput | null>("get_recording", { id }, () => mock.getRecording(id));
 export const deleteRecording = (id: string) =>
