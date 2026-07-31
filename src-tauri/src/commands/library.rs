@@ -1,4 +1,8 @@
-use crate::{recording::types::*, security, state::AppState};
+use crate::{
+    recording::types::*,
+    security,
+    state::{AppState, LibrarySnapshot},
+};
 use std::fs;
 use std::process::Command;
 use tauri::State;
@@ -6,6 +10,22 @@ use tauri::State;
 #[tauri::command]
 pub fn get_recordings(state: State<'_, AppState>) -> Vec<RecordingOutput> {
     state.library.recordings.read().clone()
+}
+
+#[tauri::command]
+pub fn get_library_snapshot(state: State<'_, AppState>) -> LibrarySnapshot {
+    state.library.snapshot()
+}
+
+#[tauri::command]
+pub async fn wait_for_library_update(
+    after_revision: u64,
+    state: State<'_, AppState>,
+) -> Result<LibrarySnapshot, String> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || library.wait_for_update(after_revision))
+        .await
+        .map_err(|error| format!("Recorder library update worker failed: {error}"))
 }
 
 #[tauri::command]
@@ -42,7 +62,7 @@ pub fn delete_recording(id: String, state: State<'_, AppState>) -> Result<(), St
         .recordings
         .write()
         .retain(|recording| recording.id != id);
-    state.library.persist()?;
+    state.library.persist_and_notify("recording_deleted")?;
     Ok(())
 }
 
@@ -64,7 +84,7 @@ pub fn rename_recording(
         recording.title = title;
         recording.clone()
     };
-    state.library.persist()?;
+    state.library.persist_and_notify("recording_renamed")?;
     Ok(updated)
 }
 
