@@ -84,6 +84,11 @@ export interface RecordingOutput {
   thumbnailDataUrl?: string;
 }
 
+export interface LibrarySnapshot {
+  revision: number;
+  recordings: RecordingOutput[];
+}
+
 export interface RecorderSettings {
   defaultMicrophoneId: string | null;
   defaultCameraId: string | null;
