@@ -121,6 +121,7 @@ export const SaasApiErrorSchema = z
           "bad_request",
           "method_not_allowed",
           "unsupported_media_type",
+          "request_timeout",
           "not_authenticated",
           "not_authorized",
           "not_found",
