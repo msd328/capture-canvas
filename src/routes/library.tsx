@@ -23,7 +23,45 @@ function LibraryPage() {
   const [items, setItems] = useState<RecordingOutput[]>([]);
 
   useEffect(() => {
-    desktop.getRecordings().then(setItems);
+    let cancelled = false;
+
+    const waitBeforeRetry = () =>
+      new Promise<void>((resolve) => {
+        window.setTimeout(resolve, 1_000);
+      });
+
+    const watchLibrary = async () => {
+      let snapshot = await desktop.getLibrarySnapshot();
+      if (cancelled) return;
+
+      let revision = snapshot.revision;
+      setItems(snapshot.recordings);
+
+      if (!desktop.isDesktop()) return;
+
+      while (!cancelled) {
+        try {
+          snapshot = await desktop.waitForLibraryUpdate(revision);
+          if (cancelled) return;
+          if (snapshot.revision !== revision) {
+            revision = snapshot.revision;
+            setItems(snapshot.recordings);
+          }
+        } catch {
+          if (cancelled) return;
+          await waitBeforeRetry();
+        }
+      }
+    };
+
+    void watchLibrary().catch(async () => {
+      const fallback = await desktop.getRecordings().catch(() => []);
+      if (!cancelled) setItems(fallback);
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
