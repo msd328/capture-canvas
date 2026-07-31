@@ -44,10 +44,20 @@ function errorResponse(
   );
 }
 
-function envValue(env: unknown, key: string): string | undefined {
-  if (!env || typeof env !== "object") return undefined;
-  const value = (env as Record<string, unknown>)[key];
+function recordValue(source: unknown, key: string): string | undefined {
+  if (!source || typeof source !== "object") return undefined;
+  const value = (source as Record<string, unknown>)[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function envValue(env: unknown, key: string): string | undefined {
+  const runtimeValue = recordValue(env, key);
+  if (runtimeValue) return runtimeValue;
+
+  if (typeof process !== "undefined") {
+    return recordValue(process.env, key);
+  }
+  return undefined;
 }
 
 function isHttpsUrl(value: string | undefined): boolean {
