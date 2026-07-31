@@ -10,6 +10,7 @@ import type {
   RecordingOutput,
   WindowInfo,
 } from "@/types/recorder";
+import type { SecureAuthProbe, SecureAuthStatus } from "@/types/saas";
 import * as mock from "./mock-desktop";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -50,6 +51,21 @@ export function localFileUrl(filePath: string): string | null {
   if (typeof convert !== "function") return null;
   return convert(filePath, "asset");
 }
+
+export const getSecureAuthStatus = () =>
+  call<SecureAuthStatus>("get_secure_auth_status", undefined, async () => ({
+    supported: false,
+    signedIn: false,
+    storage: "unsupported",
+  }));
+export const probeSecureAuthStore = () =>
+  call<SecureAuthProbe>("probe_secure_auth_store", undefined, async () => ({
+    supported: false,
+    roundTripOk: false,
+    storage: "unsupported",
+  }));
+export const clearSecureAuthSession = () =>
+  call<void>("clear_secure_auth_session", undefined, async () => undefined);
 
 export const listDisplays = () =>
   call<DisplayInfo[]>("list_displays", undefined, () => mock.listDisplays());
