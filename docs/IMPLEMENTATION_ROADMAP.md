@@ -22,9 +22,9 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Pull and run `scripts/windows-local-check.ps1` for the bounded FFmpeg finalizer batch.
+1. Pull the Windows formatting-gate recovery, run `bunx prettier --write "src/**/*.{ts,tsx}" "vite.config.ts"`, review the diff, then rerun `scripts/windows-local-check.ps1`.
 2. Repeat Pause/Resume and confirm native `FinalizerHealth` success or bounded `FallbackHealth` output plus final candidate publication.
-3. Check the first Windows CI run and resolve any frontend, formatting, test, dependency-lock or Windows compilation failures.
+3. Check the first Windows CI run and resolve any remaining frontend, formatting, test, dependency-lock or Windows compilation failures.
 4. Run one single-segment recording and capture `ThumbnailHealth` to identify the native thumbnail failure stage or confirm success.
 5. Validate the stale/recent/final-file cleanup matrix, including stale `.ffmpeg-finalizing-*` candidates.
 6. Begin the mid-August SaaS MVP foundation: architecture decision, authentication contract, upload-session model and secure desktop token-storage design.
@@ -192,7 +192,7 @@ Every implementation update must also include the security-impact block defined 
 | REL-11 | 🔵 | Crash-recovery metadata | Active session journal |
 | REL-12 | ⚪ | Recover playable output after crash | Recovery workflow |
 | REL-13 | ⚪ | Diagnostic log rotation | Bounded log storage |
-| REL-14 | 🟡 | Windows CI build/test gate | GitHub Actions is configured and `scripts/windows-local-check.ps1` mirrors its commands locally; first green hosted run pending |
+| REL-14 | 🟡 | Windows CI build/test gate | Local validation exposed 6,899 Prettier failures, mostly Windows CRLF conversion; explicit LF attributes, Prettier policy and per-command exit-code enforcement are now present, while frontend normalization and the first green local/hosted run remain pending |
 
 ## Desktop UX
 
@@ -256,7 +256,7 @@ The detailed policy, trust boundaries, current data inventory, and mandatory sta
 | SEC-06 | 🟡 | Comprehensive Rust command-input validation and limits | UUID, title, FPS, device ID, output-path and settings validation added; dimensions/crops/source IDs/negative test suite remain |
 | SEC-07 | 🔵 | Remove or authenticate external executable discovery | Production never executes an unverified PATH/environment-selected FFmpeg binary |
 | SEC-08 | 🟡 | Structured diagnostic-log privacy and redaction | `FallbackHealth` and `FinalizationHealth` add only stage, timing, counts, process outcome and file-size fields; free-form backend errors and exported reports still require review |
-| SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot plus Windows CI validation are configured; first successful update/alert and CI cycle pending |
+| SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot, Windows CI, stable line-ending policy and local exit-code enforcement are configured; first green dependency/CI/local validation cycle remains pending |
 | SEC-10 | 🔵 | Secret scanning and repository protection | Secret scanning enabled; test secret is blocked or detected without entering history |
 | SEC-11 | ⚪ | Signed executable, installer, updater, and update metadata | Signature verification passes on a clean machine |
 | SEC-12 | ⚪ | OS secure storage for future account tokens | Tokens use Windows Credential Manager/macOS Keychain and never JSON/localStorage/logs |
@@ -345,3 +345,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-30 | `32ad827..a4bf436` | Bounded WinRT StorageFile open and MediaClip decode waits with cancellation settling and path-free diagnostics; CTRL-13 and HLT-23 → 🟡 |
 | 2026-07-30 | `34ea234..7e750d5` | Added a local Windows validation script, scoped the known macro warning expectation, and recorded bounded-wait compile plus recent-artifact evidence; CTRL-13, HLT-21/23, REL-10 and REL-14 remain 🟡 |
 | 2026-07-31 | `832e222..3e58792` | Added bounded isolated FFmpeg concat fallback, native/fallback timing, path-free fallback health and stale candidate cleanup; CTRL-11/13, FFM-06, HLT-22/24 and SEC-08 remain 🟡 pending Windows validation |
+| 2026-07-31 | `61ff6f5..5b6d015` | Added explicit cross-platform line-ending policy, actionable Windows validation failures and recorded the 6,899-error Prettier baseline; REL-14 and SEC-09 remain 🟡 pending frontend normalization and a green run |
