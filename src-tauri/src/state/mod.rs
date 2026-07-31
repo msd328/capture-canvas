@@ -38,7 +38,7 @@ impl LibraryRevision {
 
     fn bump(&self) -> u64 {
         let mut value = self.value.lock();
-        *value = value.saturating_add(1);
+        *value = (*value).saturating_add(1);
         let revision = *value;
         self.changed.notify_all();
         revision
@@ -47,7 +47,7 @@ impl LibraryRevision {
     fn wait_for_change(&self, after_revision: u64) {
         let mut value = self.value.lock();
         if *value <= after_revision {
-            self.changed.wait_for(&mut value, LIBRARY_UPDATE_WAIT);
+            let _ = self.changed.wait_for(&mut value, LIBRARY_UPDATE_WAIT);
         }
     }
 }
