@@ -169,10 +169,13 @@ pub async fn stop_recording(state: State<'_, AppState>) -> Result<RecordingOutpu
     let library_insert_ms = insert_started.elapsed().as_millis();
 
     let persist_started = Instant::now();
-    if let Err(error) = state.library.persist() {
-        log_control_failure("stop", "library_persist", command_started);
-        return Err(error);
-    }
+    let library_revision = match state.library.persist_and_notify("recording_added") {
+        Ok(revision) => revision,
+        Err(error) => {
+            log_control_failure("stop", "library_persist", command_started);
+            return Err(error);
+        }
+    };
     let library_persist_ms = persist_started.elapsed().as_millis();
 
     let thumbnail_started = Instant::now();
@@ -182,7 +185,7 @@ pub async fn stop_recording(state: State<'_, AppState>) -> Result<RecordingOutpu
     let thumbnail_schedule_ms = thumbnail_started.elapsed().as_millis();
 
     eprintln!(
-        "[Recorder][ControlHealth] operation=stop ok=true engine_ms={engine_ms} path_validation_ms={path_validation_ms} library_insert_ms={library_insert_ms} library_persist_ms={library_persist_ms} thumbnail_schedule_ms={thumbnail_schedule_ms} total_ms={}",
+        "[Recorder][ControlHealth] operation=stop ok=true engine_ms={engine_ms} path_validation_ms={path_validation_ms} library_insert_ms={library_insert_ms} library_persist_ms={library_persist_ms} library_revision={library_revision} thumbnail_schedule_ms={thumbnail_schedule_ms} total_ms={}",
         command_started.elapsed().as_millis(),
     );
     Ok(output)
