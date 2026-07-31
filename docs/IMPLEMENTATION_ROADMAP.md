@@ -22,10 +22,10 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Pull the frontend warning cleanup and rerun `scripts/windows-local-check.ps1`; the lint stage should report zero warnings while the full Windows gate remains green.
+1. Pull the automatic library-refresh batch, run `scripts/windows-local-check.ps1`, and confirm the library thumbnail replaces its placeholder without navigation or restart.
 2. Repeat Pause/Resume and confirm native `FinalizerHealth` success or bounded `FallbackHealth` output plus final candidate publication.
 3. Check the first Windows CI run and resolve any remaining frontend, formatting, test, dependency-lock or Windows compilation failures.
-4. Run one single-segment recording and capture `ThumbnailHealth` to identify the native thumbnail failure stage or confirm success.
+4. Run one single-segment recording and capture `ThumbnailHealth` plus `LibraryHealth` to confirm native thumbnail completion and revision notification.
 5. Validate the stale/recent/final-file cleanup matrix, including stale `.ffmpeg-finalizing-*` candidates.
 6. Begin the mid-August SaaS MVP foundation: architecture decision, authentication contract, upload-session model and secure desktop token-storage design.
 7. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
@@ -156,6 +156,7 @@ Every implementation update must also include the security-impact block defined 
 | HLT-22 | 🟡 | Startup orphan-cleanup summary and safety counters | `CleanupHealth` recognises part/mixed/system/native-finalizer and FFmpeg-finalizer candidates; stale/recent/final-file Windows matrix remains pending |
 | HLT-23 | 🟡 | Native file-open and clip-decode timeout/cancellation outcome | Windows compiler accepted bounded open/decode waits and diagnostics; forced timeout/cancellation runtime evidence remains pending |
 | HLT-24 | 🟡 | FFmpeg fallback timeout, termination, candidate and publication health | `FallbackHealth` reports segment validation, spawn, in-memory manifest submission, process exit/timeout, kill/reap, candidate validation, publish retries and cleanup deferral; Windows fallback runtime pending |
+| HLT-25 | 🟡 | Library revision and persisted-update notification health | `LibraryHealth` emits only a fixed change reason and monotonic revision; Windows live-refresh evidence pending |
 
 ## Recording library
 
@@ -168,7 +169,7 @@ Every implementation update must also include the security-impact block defined 
 | LIB-05 | ✅ | Open recording location | Explorer selects file |
 | LIB-06 | 🟡 | Native Windows video thumbnails | Normal-path conversion, bounded retries, typed path-free failure stages and worker timing diagnostics are implemented; rerun pending |
 | LIB-07 | 🟡 | Background thumbnail backfill | Per-item failure stages and generated/failed totals implemented; existing-library validation pending |
-| LIB-08 | 🔵 | Automatic UI refresh after thumbnail completion | Thumbnail appears without page restart |
+| LIB-08 | 🟡 | Automatic UI refresh after thumbnail completion | Revision snapshots and a fixed 25-second local wait refresh persisted recording, rename, delete and thumbnail changes without navigation; Windows runtime validation pending |
 | LIB-09 | 🔵 | Search and sorting | Title/date/duration sorting |
 | LIB-10 | ⚪ | Folders and collections | Organisational UI |
 | LIB-11 | ⚪ | Recording details panel | Technical/media metadata |
@@ -347,3 +348,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-31 | `832e222..3e58792` | Added bounded isolated FFmpeg concat fallback, native/fallback timing, path-free fallback health and stale candidate cleanup; CTRL-11/13, FFM-06, HLT-22/24 and SEC-08 remain 🟡 pending Windows validation |
 | 2026-07-31 | `61ff6f5..5b6d015` | Added explicit cross-platform line-ending policy, actionable Windows validation failures and recorded the 6,899-error Prettier baseline; REL-14 and SEC-09 remain 🟡 pending frontend normalization and a green run |
 | 2026-07-31 | `dccc925..25393d1` | Fixed camera preview cleanup ownership, allowed six stable Fast Refresh helper exports and recorded a successful complete Windows local gate; REL-14 and SEC-09 remain 🟡 pending a zero-warning rerun and hosted CI |
+| 2026-07-31 | `51baedd..fa7e0e9` | Added bounded library revision snapshots, persisted-change notifications and automatic UI refresh; LIB-08 and HLT-25 → 🟡 pending Windows validation |
