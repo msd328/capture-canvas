@@ -22,12 +22,12 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Pull the combined SaaS foundation, run `scripts/windows-local-check.ps1`, validate **Settings → Cloud account → Check secure storage**, and verify `/api/v1/health` plus `/api/v1/capabilities`.
+1. Pull the bounded SaaS request boundary, run `scripts/windows-local-check.ps1`, validate **Settings → Cloud account → Check secure storage**, and verify the `/api/v1/upload-sessions` rejection matrix.
 2. Repeat Pause/Resume and confirm native `FinalizerHealth` success or bounded `FallbackHealth` output plus final candidate publication.
 3. Check the first Windows CI run and resolve any remaining frontend, formatting, test, dependency-lock or Windows compilation failures.
 4. Select the real SaaS API origin and OIDC provider; add only the chosen HTTPS origin to CSP before enabling desktop cloud traffic.
 5. Implement native OIDC authorization-code/PKCE transaction handling, state/nonce verification, token exchange, rotation, logout and revocation.
-6. Implement the authenticated upload-session API and direct object-storage adapter from the shared upload contracts.
+6. Implement signed-token verification, owner-derived cloud records, authenticated upload-session creation and the direct object-storage adapter.
 7. Capture `ThumbnailHealth` plus `LibraryHealth` evidence for the now-validated live Library refresh path.
 8. Validate the stale/recent/final-file cleanup matrix, including stale `.ffmpeg-finalizing-*` candidates.
 9. Run the 60-second mostly-static full-source and selected-area duration matrix.
@@ -262,7 +262,7 @@ The detailed policy, trust boundaries, current data inventory, and mandatory sta
 | SEC-10 | 🔵 | Secret scanning and repository protection | Secret scanning enabled; test secret is blocked or detected without entering history |
 | SEC-11 | ⚪ | Signed executable, installer, updater, and update metadata | Signature verification passes on a clean machine |
 | SEC-12 | 🟡 | OS secure storage for future account tokens | Windows Credential Manager status/probe/clear boundary is implemented with fixed targets and no secret-return command; Windows runtime and macOS Keychain support remain |
-| SEC-13 | ⚪ | SaaS authentication, object authorisation, tenancy, and rate-limit tests | Cross-user/cross-workspace access attempts are rejected server-side |
+| SEC-13 | ⚪ | SaaS authentication, object authorisation, tenancy, and rate-limit tests | Request parsing is bounded and fail-closed; signed-token verification, ownership, cross-user rejection and rate limits remain unimplemented |
 | SEC-14 | ⚪ | Optional encrypted local recording storage | Keys are protected by the OS and recovery/deletion behaviour is documented |
 | SEC-15 | ⚪ | Independent penetration test and remediation verification | High/critical findings resolved before public release |
 
@@ -274,7 +274,7 @@ The mid-August target is a focused desktop + SaaS MVP. Authentication, secure de
 |---|---:|---|
 | SAAS-01 | 🟡 | Provider-neutral OIDC/PKCE, capability, visibility and upload metadata contracts; provider selection and native token exchange pending |
 | SAAS-02 | 🟡 | Windows Credential Manager readiness/status/clear boundary and failure-isolated Settings UI; Windows validation and real login integration pending |
-| SAAS-03 | 🟡 | Resumable uploads | Strict upload-session contract and fail-closed API route exist; authenticated object-storage adapter pending |
+| SAAS-03 | 🟡 | Resumable uploads | Upload-session metadata is limited to 64 KiB, must arrive within ten seconds, uses strict UTF-8/JSON/Zod validation and still fails closed; authenticated object-storage adapter pending |
 | SAAS-04 | 🔵 | Upload progress/retry |
 | SAAS-05 | 🔵 | Shareable links |
 | SAAS-06 | 🟡 | Public/private/link-only permissions | Visibility contract exists; server-side ownership and authorization enforcement pending |
@@ -353,3 +353,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-31 | `da131b3..0f83836` | Added provider-neutral OIDC/upload contracts, disabled-by-default SaaS configuration, Windows Credential Manager readiness commands and Settings UI; LIB-08 → ✅, SAAS-01/02, SEC-12 and HLT-26 → 🟡 |
 | 2026-07-31 | `b219b02..2a20e70` | Added versioned SaaS API contracts, fail-closed health/capability routing and a reserved upload-session boundary; SAAS-03/06/08 → 🟡 pending build/runtime and authenticated-adapter validation |
 | 2026-07-31 | `71c4bf3..03146e1` | Isolated secure-auth readiness failures from recorder/device settings; SAAS-02 remains 🟡 pending Windows compile and Credential Manager probe evidence |
+| 2026-07-31 | `16cb8b7..1f52838` | Added method/media-type checks, a 64 KiB byte ceiling, ten-second body deadline, strict UTF-8/JSON/Zod validation and fail-closed upload-session rejection; SAAS-03 remains 🟡 and SEC-13 remains ⚪ |
