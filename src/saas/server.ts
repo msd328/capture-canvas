@@ -8,6 +8,11 @@ import {
 const API_PREFIX = `/api/${SAAS_API_VERSION}`;
 const MIN_CONFIGURED_UPLOAD_BYTES = 1024 * 1024;
 
+type ServerEnvironment = Record<string, string | undefined>;
+type ServerGlobal = typeof globalThis & {
+  process?: { env?: ServerEnvironment };
+};
+
 function responseHeaders(): Headers {
   return new Headers({
     "cache-control": "no-store",
@@ -54,10 +59,8 @@ function envValue(env: unknown, key: string): string | undefined {
   const runtimeValue = recordValue(env, key);
   if (runtimeValue) return runtimeValue;
 
-  if (typeof process !== "undefined") {
-    return recordValue(process.env, key);
-  }
-  return undefined;
+  const serverEnvironment = (globalThis as ServerGlobal).process?.env;
+  return recordValue(serverEnvironment, key);
 }
 
 function isHttpsUrl(value: string | undefined): boolean {
