@@ -22,7 +22,7 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Pull the SaaS auth-foundation batch, run `scripts/windows-local-check.ps1`, and validate **Settings → Cloud account → Check secure storage** on Windows.
+1. Pull the combined SaaS foundation, run `scripts/windows-local-check.ps1`, validate **Settings → Cloud account → Check secure storage**, and verify `/api/v1/health` plus `/api/v1/capabilities`.
 2. Repeat Pause/Resume and confirm native `FinalizerHealth` success or bounded `FallbackHealth` output plus final candidate publication.
 3. Check the first Windows CI run and resolve any remaining frontend, formatting, test, dependency-lock or Windows compilation failures.
 4. Select the real SaaS API origin and OIDC provider; add only the chosen HTTPS origin to CSP before enabling desktop cloud traffic.
@@ -272,14 +272,14 @@ The mid-August target is a focused desktop + SaaS MVP. Authentication, secure de
 
 | ID | Status | Work |
 |---|---:|---|
-| SAAS-01 | 🟡 | Provider-neutral OIDC/PKCE, visibility and upload metadata contracts; provider selection and native token exchange pending |
+| SAAS-01 | 🟡 | Provider-neutral OIDC/PKCE, capability, visibility and upload metadata contracts; provider selection and native token exchange pending |
 | SAAS-02 | 🟡 | Windows Credential Manager readiness/status/clear boundary; Windows validation and real login integration pending |
-| SAAS-03 | 🔵 | Resumable uploads |
+| SAAS-03 | 🟡 | Resumable uploads | Strict upload-session contract and fail-closed API route exist; authenticated object-storage adapter pending |
 | SAAS-04 | 🔵 | Upload progress/retry |
 | SAAS-05 | 🔵 | Shareable links |
-| SAAS-06 | 🔵 | Public/private/link-only permissions |
+| SAAS-06 | 🟡 | Public/private/link-only permissions | Visibility contract exists; server-side ownership and authorization enforcement pending |
 | SAAS-07 | ⚪ | Cloud video processing/streaming |
-| SAAS-08 | 🔵 | Cloud thumbnails and metadata |
+| SAAS-08 | 🟡 | Cloud thumbnails and metadata | Strict cloud recording metadata contract exists; database persistence and cloud library pending |
 | SAAS-09 | ⚪ | Comments and reactions |
 | SAAS-10 | ⚪ | Team workspaces |
 | SAAS-11 | 🔵 | Usage limits |
@@ -351,3 +351,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-31 | `dccc925..25393d1` | Fixed camera preview cleanup ownership, allowed six stable Fast Refresh helper exports and recorded a successful complete Windows local gate; REL-14 and SEC-09 remain 🟡 pending a zero-warning rerun and hosted CI |
 | 2026-07-31 | `51baedd..fa7e0e9` | Added bounded library revision snapshots, persisted-change notifications and automatic UI refresh; LIB-08 and HLT-25 → 🟡 pending Windows validation |
 | 2026-07-31 | `da131b3..0f83836` | Added provider-neutral OIDC/upload contracts, disabled-by-default SaaS configuration, Windows Credential Manager readiness commands and Settings UI; LIB-08 → ✅, SAAS-01/02, SEC-12 and HLT-26 → 🟡 |
+| 2026-07-31 | `b219b02..2a20e70` | Added versioned SaaS API contracts, fail-closed health/capability routing and a reserved upload-session boundary; SAAS-03/06/08 → 🟡 pending build/runtime and authenticated-adapter validation |
