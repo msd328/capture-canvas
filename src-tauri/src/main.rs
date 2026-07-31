@@ -6,6 +6,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod auth;
 mod camera;
 mod capture;
 mod commands;
@@ -38,6 +39,9 @@ fn main() {
         })
         .manage(AppState::new())
         .invoke_handler(tauri::generate_handler![
+            commands::auth::get_secure_auth_status,
+            commands::auth::probe_secure_auth_store,
+            commands::auth::clear_secure_auth_session,
             commands::devices::list_displays,
             commands::devices::list_windows,
             commands::devices::list_microphones,
