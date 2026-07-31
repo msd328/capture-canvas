@@ -30,6 +30,11 @@ export type SaasServerConfigState =
   | { enabled: false; missing: string[] }
   | { enabled: true; config: SaasServerConfig };
 
+type ServerEnvironment = Record<string, string | undefined>;
+type ServerGlobal = typeof globalThis & {
+  process?: { env?: ServerEnvironment };
+};
+
 const requiredEnvironment = {
   SAAS_API_ORIGIN: "apiOrigin",
   OIDC_ISSUER: "oidcIssuer",
@@ -37,12 +42,16 @@ const requiredEnvironment = {
   OIDC_REDIRECT_URI: "oidcRedirectUri",
 } as const;
 
+function defaultEnvironment(): ServerEnvironment {
+  return (globalThis as ServerGlobal).process?.env ?? {};
+}
+
 /**
  * Read SaaS configuration only on the server. Missing values keep cloud access
  * disabled; partially configured deployments never guess an endpoint or provider.
  */
 export function readSaasServerConfig(
-  environment: NodeJS.ProcessEnv = process.env,
+  environment: ServerEnvironment = defaultEnvironment(),
 ): SaasServerConfigState {
   const missing = Object.keys(requiredEnvironment).filter((name) => !environment[name]?.trim());
   if (missing.length > 0) {
