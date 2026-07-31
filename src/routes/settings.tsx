@@ -37,22 +37,40 @@ function SettingsPage() {
   const [mics, setMics] = useState<MicrophoneInfo[]>([]);
   const [cams, setCams] = useState<CameraInfo[]>([]);
   const [authStatus, setAuthStatus] = useState<SecureAuthStatus | null>(null);
+  const [authStatusError, setAuthStatusError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [checkingSecureStore, setCheckingSecureStore] = useState(false);
   const [clearingSession, setClearingSession] = useState(false);
 
   useEffect(() => {
-    Promise.all([
+    let cancelled = false;
+
+    void Promise.all([
       desktop.getSettings(),
       desktop.listMicrophones(),
       desktop.listCameras(),
-      desktop.getSecureAuthStatus(),
-    ]).then(([s, m, c, auth]) => {
+    ]).then(([s, m, c]) => {
+      if (cancelled) return;
       setSettings(s);
       setMics(m);
       setCams(c);
-      setAuthStatus(auth);
     });
+
+    void desktop.getSecureAuthStatus().then(
+      (status) => {
+        if (cancelled) return;
+        setAuthStatus(status);
+        setAuthStatusError(false);
+      },
+      () => {
+        if (cancelled) return;
+        setAuthStatusError(true);
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   if (!settings) {
@@ -82,6 +100,7 @@ function SettingsPage() {
       const probe = await desktop.probeSecureAuthStore();
       const status = await desktop.getSecureAuthStatus();
       setAuthStatus(status);
+      setAuthStatusError(false);
       if (!probe.supported) {
         toast.info("Native secure account storage is unavailable on this platform.");
       } else if (probe.roundTripOk) {
@@ -90,6 +109,7 @@ function SettingsPage() {
         toast.error("Secure account storage did not pass its readiness check");
       }
     } catch (error) {
+      setAuthStatusError(true);
       toast.error(error instanceof Error ? error.message : "Secure storage check failed");
     } finally {
       setCheckingSecureStore(false);
@@ -101,13 +121,28 @@ function SettingsPage() {
     try {
       await desktop.clearSecureAuthSession();
       setAuthStatus(await desktop.getSecureAuthStatus());
+      setAuthStatusError(false);
       toast.success("Local cloud session cleared");
     } catch (error) {
+      setAuthStatusError(true);
       toast.error(error instanceof Error ? error.message : "Unable to clear cloud session");
     } finally {
       setClearingSession(false);
     }
   };
+
+  const authStatusTitle = authStatusError
+    ? "Secure storage status unavailable"
+    : authStatus === null
+      ? "Checking secure storage…"
+      : authStatus.supported
+        ? "Windows Credential Manager ready"
+        : "Native secure storage unavailable";
+  const authStatusDescription = authStatusError
+    ? "Recorder settings remain available. Run the readiness check to retry secure storage."
+    : authStatus?.signedIn
+      ? "A local cloud session is stored securely."
+      : "No cloud session is stored on this device.";
 
   return (
     <AppShell>
@@ -208,16 +243,8 @@ function SettingsPage() {
         >
           <div className="w-[26rem] max-w-full space-y-3">
             <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs">
-              <div className="font-medium text-foreground">
-                {authStatus?.supported
-                  ? "Windows Credential Manager ready"
-                  : "Native secure storage unavailable"}
-              </div>
-              <div className="mt-1 text-muted-foreground">
-                {authStatus?.signedIn
-                  ? "A local cloud session is stored securely."
-                  : "No cloud session is stored on this device."}
-              </div>
+              <div className="font-medium text-foreground">{authStatusTitle}</div>
+              <div className="mt-1 text-muted-foreground">{authStatusDescription}</div>
             </div>
             <p className="text-xs text-muted-foreground">
               The identity provider and API origin are not configured yet. Recorder will not make a
