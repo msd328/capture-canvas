@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import * as desktop from "@/services/desktop";
 import type { CameraInfo, MicrophoneInfo, RecorderSettings } from "@/types/recorder";
+import type { SecureAuthStatus } from "@/types/saas";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -35,16 +36,23 @@ function SettingsPage() {
   const [settings, setSettings] = useState<RecorderSettings | null>(null);
   const [mics, setMics] = useState<MicrophoneInfo[]>([]);
   const [cams, setCams] = useState<CameraInfo[]>([]);
+  const [authStatus, setAuthStatus] = useState<SecureAuthStatus | null>(null);
   const [saving, setSaving] = useState(false);
+  const [checkingSecureStore, setCheckingSecureStore] = useState(false);
+  const [clearingSession, setClearingSession] = useState(false);
 
   useEffect(() => {
-    Promise.all([desktop.getSettings(), desktop.listMicrophones(), desktop.listCameras()]).then(
-      ([s, m, c]) => {
-        setSettings(s);
-        setMics(m);
-        setCams(c);
-      },
-    );
+    Promise.all([
+      desktop.getSettings(),
+      desktop.listMicrophones(),
+      desktop.listCameras(),
+      desktop.getSecureAuthStatus(),
+    ]).then(([s, m, c, auth]) => {
+      setSettings(s);
+      setMics(m);
+      setCams(c);
+      setAuthStatus(auth);
+    });
   }, []);
 
   if (!settings) {
@@ -65,6 +73,39 @@ function SettingsPage() {
       toast.success("Settings saved");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const checkSecureStore = async () => {
+    setCheckingSecureStore(true);
+    try {
+      const probe = await desktop.probeSecureAuthStore();
+      const status = await desktop.getSecureAuthStatus();
+      setAuthStatus(status);
+      if (!probe.supported) {
+        toast.info("Native secure account storage is unavailable on this platform.");
+      } else if (probe.roundTripOk) {
+        toast.success("Windows secure account storage is ready");
+      } else {
+        toast.error("Secure account storage did not pass its readiness check");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Secure storage check failed");
+    } finally {
+      setCheckingSecureStore(false);
+    }
+  };
+
+  const clearCloudSession = async () => {
+    setClearingSession(true);
+    try {
+      await desktop.clearSecureAuthSession();
+      setAuthStatus(await desktop.getSecureAuthStatus());
+      toast.success("Local cloud session cleared");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to clear cloud session");
+    } finally {
+      setClearingSession(false);
     }
   };
 
@@ -159,6 +200,52 @@ function SettingsPage() {
             checked={settings.showCameraBubble}
             onCheckedChange={(v) => patch({ showCameraBubble: v })}
           />
+        </Card>
+
+        <Card
+          title="Cloud account"
+          description="Secure local account storage for the upcoming upload and sharing service."
+        >
+          <div className="w-[26rem] max-w-full space-y-3">
+            <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs">
+              <div className="font-medium text-foreground">
+                {authStatus?.supported
+                  ? "Windows Credential Manager ready"
+                  : "Native secure storage unavailable"}
+              </div>
+              <div className="mt-1 text-muted-foreground">
+                {authStatus?.signedIn
+                  ? "A local cloud session is stored securely."
+                  : "No cloud session is stored on this device."}
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              The identity provider and API origin are not configured yet. Recorder will not make a
+              cloud request until those endpoints are selected and explicitly allowed.
+            </p>
+            <div className="flex flex-wrap justify-end gap-2">
+              {authStatus?.signedIn ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={clearingSession}
+                  onClick={clearCloudSession}
+                >
+                  {clearingSession ? "Clearing…" : "Clear local session"}
+                </Button>
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={checkingSecureStore}
+                onClick={checkSecureStore}
+              >
+                {checkingSecureStore ? "Checking…" : "Check secure storage"}
+              </Button>
+            </div>
+          </div>
         </Card>
       </div>
 
