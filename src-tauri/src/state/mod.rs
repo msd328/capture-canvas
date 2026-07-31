@@ -4,6 +4,7 @@
 //! directory. Media files themselves remain in the configured Recordings folder.
 
 use crate::{
+    auth::SecureAuthStore,
     encoding,
     recording::{types::*, RecordingEngine},
     security,
@@ -317,6 +318,7 @@ pub struct AppState {
     pub engine: Arc<RecordingEngine>,
     pub library: LibraryStore,
     pub settings: SettingsStore,
+    pub auth: SecureAuthStore,
 }
 
 impl AppState {
@@ -327,6 +329,7 @@ impl AppState {
             engine: RecordingEngine::new(),
             library: LibraryStore::new(data_dir.join("recordings.json")),
             settings: SettingsStore::new(data_dir.join("settings.json")),
+            auth: SecureAuthStore::new(),
         }
     }
 }
