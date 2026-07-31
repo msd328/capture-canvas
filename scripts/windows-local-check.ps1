@@ -36,7 +36,7 @@ Invoke-RecorderCheckStep `
 Invoke-RecorderCheckStep `
     -Label "Linting frontend" `
     -Command { bun run lint } `
-    -FailureHint "For Prettier or 'Delete CR' errors, run 'bun run format', review 'git diff', then rerun this script."
+    -FailureHint "For Prettier or 'Delete CR' errors, run 'bunx prettier --write eslint.config.js src vite.config.ts', review 'git diff', then rerun this script."
 
 Invoke-RecorderCheckStep `
     -Label "Building frontend" `
