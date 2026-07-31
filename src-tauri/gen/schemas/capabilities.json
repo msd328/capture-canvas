@@ -1,1 +1,1 @@
-{}
+{"main-recorder":{"identifier":"main-recorder","description":"Least-privilege core capability for the local recorder window. Native recording and library operations are exposed only through registered Rust commands.","local":true,"windows":["main"],"permissions":["core:app:default","core:event:default","core:resources:default","core:webview:default","core:window:default"]}}

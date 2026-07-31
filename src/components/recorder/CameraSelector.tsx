@@ -3,7 +3,13 @@ import { Camera, CameraOff } from "lucide-react";
 import * as desktop from "@/services/desktop";
 import type { CameraInfo } from "@/types/recorder";
 import { Switch } from "@/components/ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { SectionShell } from "./MicSelector";
 
 interface Props {
@@ -69,7 +75,10 @@ export function CameraSelector({
         // Ask once so WebView2 can expose device labels, then choose the browser
         // camera whose label most closely matches the DirectShow camera selected
         // for the native recording pipeline.
-        const permissionStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        const permissionStream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: false,
+        });
         const devices = await navigator.mediaDevices.enumerateDevices();
         permissionStream.getTracks().forEach((track) => track.stop());
 
@@ -83,7 +92,11 @@ export function CameraSelector({
 
         stream = await navigator.mediaDevices.getUserMedia({
           video: browserCamera?.deviceId
-            ? { deviceId: { exact: browserCamera.deviceId }, width: { ideal: 640 }, height: { ideal: 360 } }
+            ? {
+                deviceId: { exact: browserCamera.deviceId },
+                width: { ideal: 640 },
+                height: { ideal: 360 },
+              }
             : { width: { ideal: 640 }, height: { ideal: 360 } },
           audio: false,
         });
@@ -125,21 +138,28 @@ export function CameraSelector({
           ) : enabled ? (
             <div className="flex size-full flex-col items-center justify-center bg-[var(--gradient-accent)] text-accent-foreground">
               <Camera className="size-6" />
-              <span className="mt-1 text-[10px] font-medium uppercase tracking-wider opacity-80">Recording</span>
+              <span className="mt-1 text-[10px] font-medium uppercase tracking-wider opacity-80">
+                Recording
+              </span>
             </div>
           ) : (
             <CameraOff className="size-6 text-muted-foreground" />
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <Select value={cameraId ?? ""} onValueChange={(v) => onCameraChange(v)} disabled={!enabled}>
+          <Select
+            value={cameraId ?? ""}
+            onValueChange={(v) => onCameraChange(v)}
+            disabled={!enabled}
+          >
             <SelectTrigger>
               <SelectValue placeholder={cameras.length ? "Select camera" : "No camera found"} />
             </SelectTrigger>
             <SelectContent>
               {cameras.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
-                  {c.name}{c.isDefault ? " · Default" : ""}
+                  {c.name}
+                  {c.isDefault ? " · Default" : ""}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -148,7 +168,8 @@ export function CameraSelector({
             <p className="mt-2 text-xs text-destructive">{previewError}</p>
           ) : (
             <p className="mt-2 text-xs text-muted-foreground">
-              Live preview uses one persistent camera stream; recording still uses the native desktop pipeline.
+              Live preview uses one persistent camera stream; recording still uses the native
+              desktop pipeline.
             </p>
           )}
         </div>

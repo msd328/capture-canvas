@@ -117,7 +117,9 @@ pub fn start_native_video_capture(
         if camera && microphone && system_audio {
             eprintln!("[Recorder] Native selected-area H.264 + camera + mixed microphone/system-audio active");
         } else if microphone && system_audio {
-            eprintln!("[Recorder] Native selected-area H.264 + mixed microphone/system-audio active");
+            eprintln!(
+                "[Recorder] Native selected-area H.264 + mixed microphone/system-audio active"
+            );
         } else if camera && system_audio {
             eprintln!("[Recorder] Native selected-area H.264 + camera + system-audio active");
         } else if camera && microphone {
@@ -153,7 +155,9 @@ pub fn start_native_video_capture(
             if camera && microphone && system_audio {
                 eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera + mixed microphone/system-audio active");
             } else if microphone && system_audio {
-                eprintln!("[Recorder] Native WGC/D3D11 H.264 + mixed microphone/system-audio active");
+                eprintln!(
+                    "[Recorder] Native WGC/D3D11 H.264 + mixed microphone/system-audio active"
+                );
             } else if camera && system_audio {
                 eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera + system-audio active");
             } else if camera && microphone {
@@ -161,7 +165,9 @@ pub fn start_native_video_capture(
             } else if camera {
                 eprintln!("[Recorder] Native WGC/D3D11 H.264 + camera active");
             } else if system_audio {
-                eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 + system-audio encoder active");
+                eprintln!(
+                    "[Recorder] Native WGC/D3D11 Windows H.264 + system-audio encoder active"
+                );
             } else if microphone {
                 eprintln!("[Recorder] Native WGC/D3D11 Windows H.264 + microphone encoder active");
             } else {

@@ -269,8 +269,8 @@ fn generate_thumbnail_attempt(
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine as _;
     use windows::Storage::FileProperties::{ThumbnailMode, ThumbnailOptions};
-    use windows::Storage::Streams::{Buffer, DataReader, InputStreamOptions};
     use windows::Storage::StorageFile;
+    use windows::Storage::Streams::{Buffer, DataReader, InputStreamOptions};
 
     const REQUESTED_EDGE: u32 = 480;
     const MAX_THUMBNAIL_BYTES: u64 = 16 * 1024 * 1024;
@@ -380,6 +380,10 @@ pub fn generate_thumbnail_data_url(
     #[cfg(not(windows))]
     {
         let _ = video_path;
-        Err(ThumbnailGenerationError::new("unsupported_platform", 0, None))
+        Err(ThumbnailGenerationError::new(
+            "unsupported_platform",
+            0,
+            None,
+        ))
     }
 }

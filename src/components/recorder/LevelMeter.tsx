@@ -8,7 +8,10 @@ interface Props {
 }
 
 function normalizeDeviceName(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
 export function LevelMeter({ active, micId }: Props) {
@@ -32,7 +35,10 @@ export function LevelMeter({ active, micId }: Props) {
         const mics = await desktop.listMicrophones();
         const selected = mics.find((mic) => mic.id === micId);
 
-        const permissionStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        const permissionStream = await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: false,
+        });
         const devices = await navigator.mediaDevices.enumerateDevices();
         permissionStream.getTracks().forEach((track) => track.stop());
 
@@ -45,7 +51,12 @@ export function LevelMeter({ active, micId }: Props) {
 
         stream = await navigator.mediaDevices.getUserMedia({
           audio: browserMic?.deviceId
-            ? { deviceId: { exact: browserMic.deviceId }, echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+            ? {
+                deviceId: { exact: browserMic.deviceId },
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false,
+              }
             : { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
           video: false,
         });

@@ -72,8 +72,9 @@ impl RecordingEngine {
 
         let final_path = output_path_for(&id, config.output_path.as_deref())?;
         if let Some(parent) = final_path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("Unable to create recording folder {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| {
+                format!("Unable to create recording folder {}", parent.display())
+            })?;
         }
 
         let first_segment = segment_path(&final_path, &id, 0);
@@ -133,7 +134,9 @@ impl RecordingEngine {
 
     pub fn pause(&self) -> Result<()> {
         let mut guard = self.active.lock();
-        let rec = guard.as_mut().ok_or_else(|| anyhow!("No active recording"))?;
+        let rec = guard
+            .as_mut()
+            .ok_or_else(|| anyhow!("No active recording"))?;
         if rec.paused_at.is_some() {
             return Ok(());
         }
@@ -152,7 +155,9 @@ impl RecordingEngine {
 
     pub fn resume(&self) -> Result<()> {
         let mut guard = self.active.lock();
-        let rec = guard.as_mut().ok_or_else(|| anyhow!("No active recording"))?;
+        let rec = guard
+            .as_mut()
+            .ok_or_else(|| anyhow!("No active recording"))?;
         let Some(paused_at) = rec.paused_at else {
             return Ok(());
         };
@@ -235,9 +240,7 @@ impl RecordingEngine {
                 .paused_at
                 .map(|at| at.elapsed().as_millis() as u64)
                 .unwrap_or(0);
-        let duration_ms = (Instant::now()
-            .duration_since(rec.started_at)
-            .as_millis() as u64)
+        let duration_ms = (Instant::now().duration_since(rec.started_at).as_millis() as u64)
             .saturating_sub(paused)
             .max(1);
 
@@ -268,9 +271,10 @@ impl RecordingEngine {
 
         Ok(RecordingOutput {
             id: rec.id,
-            title: rec.config.title.unwrap_or_else(|| {
-                format!("Recording {}", Utc::now().format("%Y-%m-%d %H:%M"))
-            }),
+            title: rec
+                .config
+                .title
+                .unwrap_or_else(|| format!("Recording {}", Utc::now().format("%Y-%m-%d %H:%M"))),
             file_path: rec.final_path.to_string_lossy().to_string(),
             created_at: Utc::now().to_rfc3339(),
             duration_ms,
@@ -325,11 +329,7 @@ fn normalize_crop_region(
         ));
     }
 
-    if crop.x == 0
-        && crop.y == 0
-        && crop.width == full_width
-        && crop.height == full_height
-    {
+    if crop.x == 0 && crop.y == 0 && crop.width == full_width && crop.height == full_height {
         config.crop_region = None;
         return Ok((full_width, full_height));
     }
@@ -354,10 +354,7 @@ fn expand_tilde(path: &str) -> PathBuf {
             return PathBuf::from(home);
         }
     }
-    if let Some(rest) = path
-        .strip_prefix("~/")
-        .or_else(|| path.strip_prefix("~\\"))
-    {
+    if let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
         if let Some(home) = std::env::var_os("USERPROFILE") {
             return PathBuf::from(home).join(rest.replace('/', "\\"));
         }
@@ -525,7 +522,10 @@ fn finalize_segments(segments: &[PathBuf], final_path: &Path) -> Result<()> {
             Ok(())
         }
         Err(error) => {
-            let fallback_ms = total_started.elapsed().as_millis().saturating_sub(native_ms);
+            let fallback_ms = total_started
+                .elapsed()
+                .as_millis()
+                .saturating_sub(native_ms);
             eprintln!(
                 "[Recorder][FinalizationHealth] stage=complete ok=false method=ffmpeg-fallback segment_count={} native_ms={native_ms} fallback_ms={fallback_ms} total_ms={}",
                 segments.len(),

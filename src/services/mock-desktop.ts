@@ -89,7 +89,13 @@ export async function captureSourcePreview(target: CaptureTarget): Promise<Captu
 
 // ---------- recording state ----------
 
-let activeRecording: { id: string; startedAt: number; pausedMs: number; pausedAt: number | null; config: RecordingConfig } | null = null;
+let activeRecording: {
+  id: string;
+  startedAt: number;
+  pausedMs: number;
+  pausedAt: number | null;
+  config: RecordingConfig;
+} | null = null;
 
 export async function startRecording(config: RecordingConfig): Promise<{ id: string }> {
   const id = crypto.randomUUID();
@@ -108,7 +114,8 @@ export async function resumeRecording(): Promise<void> {
 export async function stopRecording(): Promise<RecordingOutput> {
   if (!activeRecording) throw new Error("No active recording");
   const now = Date.now();
-  const paused = activeRecording.pausedMs + (activeRecording.pausedAt ? now - activeRecording.pausedAt : 0);
+  const paused =
+    activeRecording.pausedMs + (activeRecording.pausedAt ? now - activeRecording.pausedAt : 0);
   const duration = now - activeRecording.startedAt - paused;
   const output: RecordingOutput = {
     id: activeRecording.id,
@@ -141,7 +148,10 @@ export async function getRecording(id: string): Promise<RecordingOutput | null> 
   return readLS<RecordingOutput[]>(LS_RECORDINGS, []).find((r) => r.id === id) ?? null;
 }
 export async function deleteRecording(id: string): Promise<void> {
-  writeLS(LS_RECORDINGS, readLS<RecordingOutput[]>(LS_RECORDINGS, []).filter((r) => r.id !== id));
+  writeLS(
+    LS_RECORDINGS,
+    readLS<RecordingOutput[]>(LS_RECORDINGS, []).filter((r) => r.id !== id),
+  );
 }
 export async function renameRecording(id: string, title: string): Promise<RecordingOutput> {
   const all = readLS<RecordingOutput[]>(LS_RECORDINGS, []);

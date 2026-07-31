@@ -3,7 +3,13 @@ import { Mic, MicOff } from "lucide-react";
 import * as desktop from "@/services/desktop";
 import type { MicrophoneInfo } from "@/types/recorder";
 import { Switch } from "@/components/ui/switch";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { LevelMeter } from "./LevelMeter";
 
 interface Props {
@@ -14,7 +20,13 @@ interface Props {
   previewActive?: boolean;
 }
 
-export function MicSelector({ enabled, onEnabledChange, micId, onMicChange, previewActive = true }: Props) {
+export function MicSelector({
+  enabled,
+  onEnabledChange,
+  micId,
+  onMicChange,
+  previewActive = true,
+}: Props) {
   const [mics, setMics] = useState<MicrophoneInfo[]>([]);
 
   useEffect(() => {
@@ -46,12 +58,16 @@ export function MicSelector({ enabled, onEnabledChange, micId, onMicChange, prev
           <SelectContent>
             {mics.map((m) => (
               <SelectItem key={m.id} value={m.id}>
-                {m.name}{m.isDefault ? " · Default" : ""}
+                {m.name}
+                {m.isDefault ? " · Default" : ""}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
-        <LevelMeter active={enabled && previewActive} micId={enabled && previewActive ? micId : null} />
+        <LevelMeter
+          active={enabled && previewActive}
+          micId={enabled && previewActive ? micId : null}
+        />
       </div>
     </SectionShell>
   );
@@ -72,7 +88,9 @@ export function SectionShell({
     <div className="surface-card p-5">
       <div className="mb-4 flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="flex size-7 items-center justify-center rounded-md bg-muted text-muted-foreground">{icon}</span>
+          <span className="flex size-7 items-center justify-center rounded-md bg-muted text-muted-foreground">
+            {icon}
+          </span>
           <h3 className="text-sm font-semibold text-foreground">{title}</h3>
         </div>
         {trailing}

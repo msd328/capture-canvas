@@ -111,9 +111,9 @@ fn active_capture_delivery() -> Option<Arc<CaptureDeliveryHealth>> {
 }
 
 pub mod capture {
-    use super::{CaptureDeliveryHealth, ACTIVE_CAPTURE_DELIVERY};
+    use super::{ACTIVE_CAPTURE_DELIVERY, CaptureDeliveryHealth};
     use parking_lot::Mutex;
-    use std::sync::{atomic::AtomicBool, Arc};
+    use std::sync::{Arc, atomic::AtomicBool};
     use std::thread::JoinHandle;
 
     use windows_capture_core::capture::GraphicsCaptureApiHandler as CoreGraphicsCaptureApiHandler;
@@ -164,9 +164,7 @@ pub mod capture {
         ) -> Result<(), Self::Error> {
             let timestamp = frame.timestamp().ok().map(|value| value.Duration);
             self.delivery.record_received(timestamp);
-            self.inner
-                .lock()
-                .on_frame_arrived(frame, capture_control)
+            self.inner.lock().on_frame_arrived(frame, capture_control)
         }
 
         fn on_closed(&mut self) -> Result<(), Self::Error> {
@@ -211,9 +209,7 @@ pub mod capture {
         }
 
         #[must_use]
-        pub fn into_thread_handle(
-            self,
-        ) -> JoinHandle<Result<(), GraphicsCaptureApiError<E>>> {
+        pub fn into_thread_handle(self) -> JoinHandle<Result<(), GraphicsCaptureApiError<E>>> {
             self.inner.into_thread_handle()
         }
 
@@ -257,7 +253,10 @@ pub mod capture {
             Self: Send + 'static,
             Self::Flags: Send,
         {
-            let inner = <InstrumentedHandler<Self> as CoreGraphicsCaptureApiHandler>::start_free_threaded(settings)?;
+            let inner =
+                <InstrumentedHandler<Self> as CoreGraphicsCaptureApiHandler>::start_free_threaded(
+                    settings,
+                )?;
             let callback = {
                 let adapter = inner.callback();
                 adapter.lock().inner.clone()
@@ -309,11 +308,11 @@ pub mod encoder {
     use std::time::Instant;
 
     use super::frame::Frame;
-    use super::{active_capture_delivery, CaptureDeliveryHealth, CaptureDeliverySnapshot};
+    use super::{CaptureDeliveryHealth, CaptureDeliverySnapshot, active_capture_delivery};
 
     pub use windows_capture_core::encoder::{
-        AudioSettingsBuilder, ContainerSettingsBuilder, ImageEncoder,
-        ImageEncoderPixelFormat, ImageFormat, VideoEncoderError, VideoSettingsSubType,
+        AudioSettingsBuilder, ContainerSettingsBuilder, ImageEncoder, ImageEncoderPixelFormat,
+        ImageFormat, VideoEncoderError, VideoSettingsSubType,
     };
 
     /// Drop-in video settings wrapper that retains the requested frame rate for
@@ -504,7 +503,8 @@ pub mod encoder {
                 .frames_received
                 .saturating_sub(delivery.frames_rate_limited);
             let actual_encoder_attempts = self.video_submitted.saturating_add(self.video_failed);
-            let processing_deficit = expected_encoder_attempts.saturating_sub(actual_encoder_attempts);
+            let processing_deficit =
+                expected_encoder_attempts.saturating_sub(actual_encoder_attempts);
 
             eprintln!(
                 "[Recorder][StreamHealth] finalize_ok={} wall_ms={} active_wall_ms={} target_fps={} frames_received={} frames_rate_limited={} frames_submitted={} expected_frames={} frame_deficit={} timeline_coverage_pct={:.1} processing_deficit={} frame_failures={} capture_fps={:.2} effective_fps={:.2} max_capture_gap_ms={:.1} max_frame_gap_ms={:.1} audio_buffers={} audio_failures={} audio_bytes={} path={}",

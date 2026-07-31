@@ -64,7 +64,9 @@ pub fn recordings_root() -> Result<PathBuf, String> {
 
 /// Return the normal user-facing path rather than Windows' extended canonical path.
 pub fn recordings_root_string() -> Result<String, String> {
-    Ok(recordings_root_display_path()?.to_string_lossy().into_owned())
+    Ok(recordings_root_display_path()?
+        .to_string_lossy()
+        .into_owned())
 }
 
 /// Remove abandoned recorder-owned temporary media after a conservative age gate.
@@ -110,8 +112,7 @@ pub fn cleanup_stale_recording_artifacts_async() {
 }
 
 fn cleanup_stale_recording_artifacts() -> Result<CleanupSummary, CleanupFailure> {
-    let root = recordings_root()
-        .map_err(|_| CleanupFailure::new("resolve_root", "unavailable"))?;
+    let root = recordings_root().map_err(|_| CleanupFailure::new("resolve_root", "unavailable"))?;
     let entries = fs::read_dir(&root)
         .map_err(|error| CleanupFailure::new("read_root", format!("{:?}", error.kind())))?;
     let now = SystemTime::now();
@@ -317,7 +318,10 @@ pub fn validate_settings(mut settings: RecorderSettings) -> Result<RecorderSetti
     if !matches!(settings.fps, 30 | 60) {
         return Err("Default recording FPS must be either 30 or 60".to_string());
     }
-    validate_device_id("Default microphone", settings.default_microphone_id.as_deref())?;
+    validate_device_id(
+        "Default microphone",
+        settings.default_microphone_id.as_deref(),
+    )?;
     validate_device_id("Default camera", settings.default_camera_id.as_deref())?;
 
     let approved = recordings_root()?;
@@ -343,10 +347,7 @@ fn expand_tilde(value: &str) -> Result<PathBuf, String> {
     if path == "~" {
         return user_home();
     }
-    if let Some(rest) = path
-        .strip_prefix("~/")
-        .or_else(|| path.strip_prefix("~\\"))
-    {
+    if let Some(rest) = path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
         return Ok(user_home()?.join(rest));
     }
     Ok(PathBuf::from(path))
@@ -391,7 +392,9 @@ mod tests {
         assert!(is_recorder_temporary_artifact(&format!(
             "{ID}.part123.mixed.mp4"
         )));
-        assert!(is_recorder_temporary_artifact(&format!("{ID}.system009.wav")));
+        assert!(is_recorder_temporary_artifact(&format!(
+            "{ID}.system009.wav"
+        )));
         assert!(is_recorder_temporary_artifact(&format!(
             ".{ID}.native-finalizing-1234-987654321.mp4"
         )));
@@ -401,7 +404,9 @@ mod tests {
 
         assert!(!is_recorder_temporary_artifact(&format!("{ID}.mp4")));
         assert!(!is_recorder_temporary_artifact(&format!("{ID}.part00.mp4")));
-        assert!(!is_recorder_temporary_artifact(&format!("{ID}.part000.mov")));
+        assert!(!is_recorder_temporary_artifact(&format!(
+            "{ID}.part000.mov"
+        )));
         assert!(!is_recorder_temporary_artifact(&format!(
             ".{ID}.native-finalizing-process-nonce.mp4"
         )));

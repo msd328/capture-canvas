@@ -53,8 +53,8 @@ export function SourceSelector({ value, onChange, cropRegion, onCropChange }: Pr
   const selectedSource = useMemo(() => {
     if (!value) return null;
     return value.kind === "display"
-      ? displays.find((source) => source.id === value.id) ?? null
-      : windows.find((source) => source.id === value.id) ?? null;
+      ? (displays.find((source) => source.id === value.id) ?? null)
+      : (windows.find((source) => source.id === value.id) ?? null);
   }, [displays, value, windows]);
 
   const chooseTarget = (target: CaptureTarget) => {
@@ -99,8 +99,20 @@ export function SourceSelector({ value, onChange, cropRegion, onCropChange }: Pr
     const rect = event.currentTarget.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
     return {
-      x: Math.max(0, Math.min(preview.width, Math.round(((event.clientX - rect.left) / rect.width) * preview.width))),
-      y: Math.max(0, Math.min(preview.height, Math.round(((event.clientY - rect.top) / rect.height) * preview.height))),
+      x: Math.max(
+        0,
+        Math.min(
+          preview.width,
+          Math.round(((event.clientX - rect.left) / rect.width) * preview.width),
+        ),
+      ),
+      y: Math.max(
+        0,
+        Math.min(
+          preview.height,
+          Math.round(((event.clientY - rect.top) / rect.height) * preview.height),
+        ),
+      ),
     };
   };
 
@@ -197,7 +209,8 @@ export function SourceSelector({ value, onChange, cropRegion, onCropChange }: Pr
 
       {kind === "window" && windows.length === 0 && !refreshing && (
         <p className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">
-          No open, visible application windows are currently available. Open the app, then press Refresh apps.
+          No open, visible application windows are currently available. Open the app, then press
+          Refresh apps.
         </p>
       )}
 
@@ -219,8 +232,18 @@ export function SourceSelector({ value, onChange, cropRegion, onCropChange }: Pr
                 Record full source
               </Button>
             )}
-            <Button type="button" variant="outline" size="sm" onClick={() => void openAreaSelector()} disabled={previewLoading}>
-              {previewLoading ? <Loader2 className="size-4 animate-spin" /> : <Crop className="size-4" />}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => void openAreaSelector()}
+              disabled={previewLoading}
+            >
+              {previewLoading ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Crop className="size-4" />
+              )}
               Select area
             </Button>
           </div>
@@ -233,10 +256,18 @@ export function SourceSelector({ value, onChange, cropRegion, onCropChange }: Pr
         <div className="rounded-2xl border border-border bg-surface p-4 shadow-[var(--shadow-soft)]">
           <div className="mb-3 flex items-start justify-between gap-3">
             <div>
-              <h3 className="text-sm font-semibold text-foreground">Drag over the area to record</h3>
-              <p className="text-xs text-muted-foreground">The recorded MP4 will contain only the highlighted rectangle.</p>
+              <h3 className="text-sm font-semibold text-foreground">
+                Drag over the area to record
+              </h3>
+              <p className="text-xs text-muted-foreground">
+                The recorded MP4 will contain only the highlighted rectangle.
+              </p>
             </div>
-            <button type="button" onClick={closeAreaSelector} className="rounded-full p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground">
+            <button
+              type="button"
+              onClick={closeAreaSelector}
+              className="rounded-full p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
               <X className="size-4" />
             </button>
           </div>
@@ -249,7 +280,12 @@ export function SourceSelector({ value, onChange, cropRegion, onCropChange }: Pr
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerUp}
           >
-            <img src={preview.dataUrl} alt="Selected source preview" draggable={false} className="pointer-events-none size-full object-fill" />
+            <img
+              src={preview.dataUrl}
+              alt="Selected source preview"
+              draggable={false}
+              className="pointer-events-none size-full object-fill"
+            />
             {draft && draft.width > 0 && draft.height > 0 && (
               <div
                 className="pointer-events-none absolute border-2 border-white shadow-[0_0_0_9999px_rgba(0,0,0,0.55)]"
@@ -269,10 +305,21 @@ export function SourceSelector({ value, onChange, cropRegion, onCropChange }: Pr
 
           {previewError && <p className="mt-3 text-xs text-destructive">{previewError}</p>}
           <div className="mt-4 flex flex-wrap justify-end gap-2">
-            <Button type="button" variant="outline" onClick={() => { onCropChange(null); closeAreaSelector(); }}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                onCropChange(null);
+                closeAreaSelector();
+              }}
+            >
               Use full source
             </Button>
-            <Button type="button" onClick={applyArea} disabled={!draft || draft.width < 64 || draft.height < 64}>
+            <Button
+              type="button"
+              onClick={applyArea}
+              disabled={!draft || draft.width < 64 || draft.height < 64}
+            >
               Use selected area
             </Button>
           </div>
@@ -282,14 +329,24 @@ export function SourceSelector({ value, onChange, cropRegion, onCropChange }: Pr
   );
 }
 
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
       className={cn(
         "inline-flex items-center gap-2 rounded-full px-4 py-1.5 text-sm font-medium transition-colors",
-        active ? "bg-surface text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+        active
+          ? "bg-surface text-foreground shadow-sm"
+          : "text-muted-foreground hover:text-foreground",
       )}
     >
       {children}
@@ -326,7 +383,11 @@ function SourceCard({
           selected && "bg-accent/15",
         )}
       >
-        {iconKind === "display" ? <Monitor className="size-6 text-muted-foreground" /> : <AppWindow className="size-6 text-muted-foreground" />}
+        {iconKind === "display" ? (
+          <Monitor className="size-6 text-muted-foreground" />
+        ) : (
+          <AppWindow className="size-6 text-muted-foreground" />
+        )}
       </div>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium text-foreground">{title}</div>

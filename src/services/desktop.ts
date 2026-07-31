@@ -31,7 +31,11 @@ function getInvoke(): Invoke | null {
   return cachedInvoke;
 }
 
-async function call<T>(cmd: string, args?: Record<string, unknown>, fallback?: () => Promise<T>): Promise<T> {
+async function call<T>(
+  cmd: string,
+  args?: Record<string, unknown>,
+  fallback?: () => Promise<T>,
+): Promise<T> {
   const invoke = getInvoke();
   if (invoke) return invoke<T>(cmd, args);
   if (!fallback) throw new Error(`Desktop command '${cmd}' is not available in web preview.`);
@@ -46,28 +50,42 @@ export function localFileUrl(filePath: string): string | null {
   return convert(filePath, "asset");
 }
 
-export const listDisplays = () => call<DisplayInfo[]>("list_displays", undefined, () => mock.listDisplays());
-export const listWindows = () => call<WindowInfo[]>("list_windows", undefined, () => mock.listWindows());
-export const listMicrophones = () => call<MicrophoneInfo[]>("list_microphones", undefined, () => mock.listMicrophones());
-export const listCameras = () => call<CameraInfo[]>("list_cameras", undefined, () => mock.listCameras());
-export const getSystemAudioSupported = () => call<boolean>("system_audio_supported", undefined, async () => false);
+export const listDisplays = () =>
+  call<DisplayInfo[]>("list_displays", undefined, () => mock.listDisplays());
+export const listWindows = () =>
+  call<WindowInfo[]>("list_windows", undefined, () => mock.listWindows());
+export const listMicrophones = () =>
+  call<MicrophoneInfo[]>("list_microphones", undefined, () => mock.listMicrophones());
+export const listCameras = () =>
+  call<CameraInfo[]>("list_cameras", undefined, () => mock.listCameras());
+export const getSystemAudioSupported = () =>
+  call<boolean>("system_audio_supported", undefined, async () => false);
 export const captureSourcePreview = (target: CaptureTarget) =>
-  call<CapturePreview>("capture_source_preview", { target }, () => mock.captureSourcePreview(target));
+  call<CapturePreview>("capture_source_preview", { target }, () =>
+    mock.captureSourcePreview(target),
+  );
 
 export const startRecording = (config: RecordingConfig) =>
   call<{ id: string }>("start_recording", { config }, () => mock.startRecording(config));
-export const pauseRecording = () => call<void>("pause_recording", undefined, () => mock.pauseRecording());
-export const resumeRecording = () => call<void>("resume_recording", undefined, () => mock.resumeRecording());
-export const stopRecording = () => call<RecordingOutput>("stop_recording", undefined, () => mock.stopRecording());
+export const pauseRecording = () =>
+  call<void>("pause_recording", undefined, () => mock.pauseRecording());
+export const resumeRecording = () =>
+  call<void>("resume_recording", undefined, () => mock.resumeRecording());
+export const stopRecording = () =>
+  call<RecordingOutput>("stop_recording", undefined, () => mock.stopRecording());
 
-export const getRecordings = () => call<RecordingOutput[]>("get_recordings", undefined, () => mock.getRecordings());
-export const getRecording = (id: string) => call<RecordingOutput | null>("get_recording", { id }, () => mock.getRecording(id));
-export const deleteRecording = (id: string) => call<void>("delete_recording", { id }, () => mock.deleteRecording(id));
+export const getRecordings = () =>
+  call<RecordingOutput[]>("get_recordings", undefined, () => mock.getRecordings());
+export const getRecording = (id: string) =>
+  call<RecordingOutput | null>("get_recording", { id }, () => mock.getRecording(id));
+export const deleteRecording = (id: string) =>
+  call<void>("delete_recording", { id }, () => mock.deleteRecording(id));
 export const renameRecording = (id: string, title: string) =>
   call<RecordingOutput>("rename_recording", { id, title }, () => mock.renameRecording(id, title));
 export const openRecordingLocation = (id: string) =>
   call<void>("open_recording_location", { id }, () => mock.openRecordingLocation(id));
 
-export const getSettings = () => call<RecorderSettings>("get_settings", undefined, () => mock.getSettings());
+export const getSettings = () =>
+  call<RecorderSettings>("get_settings", undefined, () => mock.getSettings());
 export const updateSettings = (settings: RecorderSettings) =>
   call<RecorderSettings>("update_settings", { settings }, () => mock.updateSettings(settings));

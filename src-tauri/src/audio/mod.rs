@@ -8,9 +8,9 @@
 //! WAV track, which the recording finalizer mixes into the MP4.
 
 use crate::recording::types::MicrophoneInfo;
-use anyhow::Result;
 #[cfg(not(windows))]
 use anyhow::anyhow;
+use anyhow::Result;
 use std::path::Path;
 
 #[cfg(windows)]
@@ -48,9 +48,15 @@ mod windows_backend {
         let size = devices.Size().unwrap_or(0);
         let mut microphones = Vec::with_capacity(size as usize);
         for index in 0..size {
-            let Ok(device) = devices.GetAt(index) else { continue; };
-            let Ok(id) = device.Id() else { continue; };
-            let Ok(name) = device.Name() else { continue; };
+            let Ok(device) = devices.GetAt(index) else {
+                continue;
+            };
+            let Ok(id) = device.Id() else {
+                continue;
+            };
+            let Ok(name) = device.Name() else {
+                continue;
+            };
             let id = id.to_string();
             microphones.push(MicrophoneInfo {
                 is_default: default_id.as_deref() == Some(id.as_str()),
@@ -91,7 +97,9 @@ mod windows_backend {
             let _ = stream.pause();
             drop(stream);
             if let Some(writer) = writer.lock().take() {
-                writer.finalize().context("Unable to finalize system-audio WAV")?;
+                writer
+                    .finalize()
+                    .context("Unable to finalize system-audio WAV")?;
             }
             Ok(())
         }
@@ -108,7 +116,9 @@ mod windows_backend {
 
     fn write_f32(writer: &SharedWriter, samples: impl IntoIterator<Item = f32>) {
         let mut guard = writer.lock();
-        let Some(writer) = guard.as_mut() else { return; };
+        let Some(writer) = guard.as_mut() else {
+            return;
+        };
         for sample in samples {
             if writer.write_sample(sample.clamp(-1.0, 1.0)).is_err() {
                 break;
@@ -158,7 +168,11 @@ mod windows_backend {
                 device.build_input_stream(
                     &config,
                     move |data: &[u16], _| {
-                        write_f32(&sink, data.iter().map(|&v| (v as f32 / u16::MAX as f32) * 2.0 - 1.0))
+                        write_f32(
+                            &sink,
+                            data.iter()
+                                .map(|&v| (v as f32 / u16::MAX as f32) * 2.0 - 1.0),
+                        )
                     },
                     error_callback,
                     None,
@@ -184,20 +198,30 @@ mod windows_backend {
                     None,
                 )
             }
-            other => return Err(anyhow!("Unsupported Windows loopback sample format: {other:?}")),
+            other => {
+                return Err(anyhow!(
+                    "Unsupported Windows loopback sample format: {other:?}"
+                ))
+            }
         }
         .context("Unable to create WASAPI loopback input stream")?;
 
-        stream.play().context("Unable to start WASAPI loopback capture")?;
+        stream
+            .play()
+            .context("Unable to start WASAPI loopback capture")?;
         Ok(SystemAudioCapture { stream, writer })
     }
 }
 
 pub fn enumerate_microphones() -> Vec<MicrophoneInfo> {
     #[cfg(windows)]
-    { return windows_backend::enumerate_microphones(); }
+    {
+        return windows_backend::enumerate_microphones();
+    }
     #[cfg(not(windows))]
-    { Vec::new() }
+    {
+        Vec::new()
+    }
 }
 
 pub fn resolve_microphone_name(id: &str) -> Option<String> {
@@ -209,9 +233,13 @@ pub fn resolve_microphone_name(id: &str) -> Option<String> {
 
 pub fn system_audio_supported() -> bool {
     #[cfg(windows)]
-    { return windows_backend::system_audio_supported(); }
+    {
+        return windows_backend::system_audio_supported();
+    }
     #[cfg(not(windows))]
-    { false }
+    {
+        false
+    }
 }
 
 #[cfg(windows)]
@@ -227,5 +255,7 @@ pub struct SystemAudioCapture;
 
 #[cfg(not(windows))]
 pub fn start_system_audio_capture(_path: &Path) -> Result<SystemAudioCapture> {
-    Err(anyhow!("System audio capture is not implemented on this operating system"))
+    Err(anyhow!(
+        "System audio capture is not implemented on this operating system"
+    ))
 }

@@ -28,10 +28,7 @@ impl LibraryStore {
         // Persisted metadata is untrusted. Keep only non-empty UUID-named MP4 files
         // that canonicalise to a direct child of the approved Recordings directory.
         recordings.retain(|recording| {
-            match security::validate_existing_recording_path(
-                &recording.id,
-                &recording.file_path,
-            ) {
+            match security::validate_existing_recording_path(&recording.id, &recording.file_path) {
                 Ok(_) => true,
                 Err(error) => {
                     eprintln!(
@@ -150,12 +147,9 @@ impl LibraryStore {
             .iter()
             .filter(|recording| recording.thumbnail_data_url.is_none())
             .filter_map(|recording| {
-                security::validate_existing_recording_path(
-                    &recording.id,
-                    &recording.file_path,
-                )
-                .ok()
-                .map(|path| (recording.id.clone(), path))
+                security::validate_existing_recording_path(&recording.id, &recording.file_path)
+                    .ok()
+                    .map(|path| (recording.id.clone(), path))
             })
             .collect();
         if pending.is_empty() {
@@ -294,9 +288,7 @@ fn write_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> Result<(), Strin
     let temp = path.with_extension("tmp");
     fs::write(&temp, bytes).map_err(|error| format!("Unable to write local data: {error}"))?;
     if path.exists() {
-        fs::remove_file(path)
-            .map_err(|error| format!("Unable to replace local data: {error}"))?;
+        fs::remove_file(path).map_err(|error| format!("Unable to replace local data: {error}"))?;
     }
-    fs::rename(&temp, path)
-        .map_err(|error| format!("Unable to finalize local data: {error}"))
+    fs::rename(&temp, path).map_err(|error| format!("Unable to finalize local data: {error}"))
 }

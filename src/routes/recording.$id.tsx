@@ -76,7 +76,10 @@ function RecordingPreviewPage() {
 
   return (
     <AppShell>
-      <Link to="/library" className="mb-6 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground">
+      <Link
+        to="/library"
+        className="mb-6 inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+      >
         <ArrowLeft className="size-4" /> Library
       </Link>
 
@@ -116,8 +119,19 @@ function RecordingPreviewPage() {
                     onKeyDown={(e) => e.key === "Enter" && saveTitle()}
                     autoFocus
                   />
-                  <Button size="sm" onClick={saveTitle}>Save</Button>
-                  <Button size="sm" variant="ghost" onClick={() => { setEditing(false); setTitleDraft(rec.title); }}>Cancel</Button>
+                  <Button size="sm" onClick={saveTitle}>
+                    Save
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setEditing(false);
+                      setTitleDraft(rec.title);
+                    }}
+                  >
+                    Cancel
+                  </Button>
                 </div>
               ) : (
                 <div className="flex items-center gap-2">
@@ -134,18 +148,26 @@ function RecordingPreviewPage() {
               <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <span>{formatElapsed(rec.durationMs)}</span>
                 <span>·</span>
-                <span>{rec.width} × {rec.height}</span>
+                <span>
+                  {rec.width} × {rec.height}
+                </span>
                 <span>·</span>
                 <span>{formatBytes(rec.fileSizeBytes)}</span>
                 <span>·</span>
                 <span>{new Date(rec.createdAt).toLocaleString()}</span>
               </div>
-              <div className="mt-2 truncate font-mono text-xs text-muted-foreground/80">{rec.filePath}</div>
+              <div className="mt-2 truncate font-mono text-xs text-muted-foreground/80">
+                {rec.filePath}
+              </div>
             </div>
           </div>
 
           <div className="mt-6 flex flex-wrap gap-2">
-            <Button variant="outline" onClick={() => desktop.openRecordingLocation(rec.id)} className="gap-1.5">
+            <Button
+              variant="outline"
+              onClick={() => desktop.openRecordingLocation(rec.id)}
+              className="gap-1.5"
+            >
               <FolderOpen className="size-4" /> Open file location
             </Button>
             <Link to="/">
@@ -154,7 +176,11 @@ function RecordingPreviewPage() {
               </Button>
             </Link>
             <div className="flex-1" />
-            <Button variant="ghost" onClick={onDelete} className="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive">
+            <Button
+              variant="ghost"
+              onClick={onDelete}
+              className="gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+            >
               <Trash2 className="size-4" /> Delete
             </Button>
           </div>

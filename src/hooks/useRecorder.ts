@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as desktop from "@/services/desktop";
-import type { RecorderError, RecordingConfig, RecordingOutput, RecordingStatus } from "@/types/recorder";
+import type {
+  RecorderError,
+  RecordingConfig,
+  RecordingOutput,
+  RecordingStatus,
+} from "@/types/recorder";
 
 interface UseRecorderResult {
   status: RecordingStatus;

@@ -513,12 +513,8 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
 
     let mut cleanup_deferred = false;
     let result = (|| -> Result<()> {
-        let destination = storage_file(
-            &candidate_path,
-            "destination",
-            None,
-            &mut cleanup_deferred,
-        )?;
+        let destination =
+            storage_file(&candidate_path, "destination", None, &mut cleanup_deferred)?;
 
         let composition_started = Instant::now();
         let composition = MediaComposition::new().map_err(|error| {
@@ -583,9 +579,7 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
                     decode_started.elapsed().as_millis(),
                     Some(&code),
                 );
-                anyhow!(
-                    "Unable to start decoding recording segment_index={index} hresult={code}"
-                )
+                anyhow!("Unable to start decoding recording segment_index={index} hresult={code}")
             })?;
             let outcome = wait_bounded_async!(
                 operation,
@@ -644,9 +638,7 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
                     append_started.elapsed().as_millis(),
                     Some(&code),
                 );
-                anyhow!(
-                    "Unable to append recording segment_index={index} hresult={code}"
-                )
+                anyhow!("Unable to append recording segment_index={index} hresult={code}")
             })?;
             log_stage(
                 "append_segment",
@@ -660,19 +652,21 @@ pub fn concatenate_segments(segments: &[PathBuf], final_path: &Path) -> Result<(
         }
 
         let render_started = Instant::now();
-        let render = composition.RenderToFileAsync(&destination).map_err(|error| {
-            let code = error_code(&error);
-            log_stage(
-                "render_start",
-                false,
-                "destination",
-                None,
-                None,
-                render_started.elapsed().as_millis(),
-                Some(&code),
-            );
-            anyhow!("Unable to start native Windows recording finalization hresult={code}")
-        })?;
+        let render = composition
+            .RenderToFileAsync(&destination)
+            .map_err(|error| {
+                let code = error_code(&error);
+                log_stage(
+                    "render_start",
+                    false,
+                    "destination",
+                    None,
+                    None,
+                    render_started.elapsed().as_millis(),
+                    Some(&code),
+                );
+                anyhow!("Unable to start native Windows recording finalization hresult={code}")
+            })?;
         log_stage(
             "render_start",
             true,

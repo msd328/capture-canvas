@@ -81,8 +81,7 @@ impl MixerHealthState {
                     self.microphone_dropped_frames.saturating_add(frames);
             }
             MixerSource::System => {
-                self.system_dropped_frames =
-                    self.system_dropped_frames.saturating_add(frames);
+                self.system_dropped_frames = self.system_dropped_frames.saturating_add(frames);
             }
         }
     }

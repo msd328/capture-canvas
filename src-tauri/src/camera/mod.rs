@@ -13,7 +13,15 @@ pub const OVERLAY_HEIGHT: u32 = 180;
 
 fn parse_dshow_device_names(section_name: &str) -> Vec<String> {
     let Ok(output) = encoding::ffmpeg_command()
-        .args(["-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"])
+        .args([
+            "-hide_banner",
+            "-list_devices",
+            "true",
+            "-f",
+            "dshow",
+            "-i",
+            "dummy",
+        ])
         .output()
     else {
         return Vec::new();
@@ -118,7 +126,9 @@ pub fn resolve_camera_name(id: &str) -> Option<String> {
         return Some(name.to_string());
     }
 
-    let selected = enumerate_cameras().into_iter().find(|device| device.id == id)?;
+    let selected = enumerate_cameras()
+        .into_iter()
+        .find(|device| device.id == id)?;
     let wanted = normalize(&selected.name);
     let dshow = parse_dshow_device_names("video");
     dshow
@@ -190,9 +200,11 @@ impl CameraFrameCapture {
                 let stop_result = reader
                     .StopAsync()
                     .and_then(|operation| operation.get())
-                    .map_err(|error| anyhow::anyhow!(
-                        "Unable to stop native Windows camera frame reader: {error}"
-                    ));
+                    .map_err(|error| {
+                        anyhow::anyhow!(
+                            "Unable to stop native Windows camera frame reader: {error}"
+                        )
+                    });
                 let _ = reader.Close();
                 let _ = capture.Close();
                 stop_result?;
@@ -352,11 +364,11 @@ fn start_native_camera_frame_capture(
         }
     }
 
-    let source = selected_source.ok_or_else(|| anyhow!(
-        "The selected Windows camera did not expose a colour frame source"
-    ))?;
-    let subtype = MediaEncodingSubtypes::Bgra8()
-        .context("Windows did not expose the BGRA8 media subtype")?;
+    let source = selected_source.ok_or_else(|| {
+        anyhow!("The selected Windows camera did not expose a colour frame source")
+    })?;
+    let subtype =
+        MediaEncodingSubtypes::Bgra8().context("Windows did not expose the BGRA8 media subtype")?;
     let output_size = BitmapSize {
         Width: OVERLAY_WIDTH,
         Height: OVERLAY_HEIGHT,
@@ -372,8 +384,8 @@ fn start_native_camera_frame_capture(
 
     let error_state = Arc::new(parking_lot::Mutex::new(None::<String>));
     let callback_errors = error_state.clone();
-    let handler = TypedEventHandler::<MediaFrameReader, MediaFrameArrivedEventArgs>::new(
-        move |sender, _| {
+    let handler =
+        TypedEventHandler::<MediaFrameReader, MediaFrameArrivedEventArgs>::new(move |sender, _| {
             if callback_errors.lock().is_some() {
                 return Ok(());
             }
@@ -398,8 +410,7 @@ fn start_native_camera_frame_capture(
                 }
             }
             Ok(())
-        },
-    );
+        });
     let frame_token = reader
         .FrameArrived(&handler)
         .context("Unable to subscribe to Windows camera frames")?;

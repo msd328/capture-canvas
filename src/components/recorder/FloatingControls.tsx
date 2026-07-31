@@ -14,7 +14,15 @@ interface Props {
   onStop: () => void | Promise<void>;
 }
 
-export function FloatingControls({ status, elapsedMs, micOn, cameraOn, onPause, onResume, onStop }: Props) {
+export function FloatingControls({
+  status,
+  elapsedMs,
+  micOn,
+  cameraOn,
+  onPause,
+  onResume,
+  onStop,
+}: Props) {
   const paused = status === "paused" || status === "pausing";
   const transitioning = status === "pausing" || status === "resuming" || status === "stopping";
 
@@ -37,8 +45,12 @@ export function FloatingControls({ status, elapsedMs, micOn, cameraOn, onPause, 
       >
         <div className="flex items-center gap-2 pl-2 pr-1">
           <span className={cn("rec-dot", paused && "!animate-none opacity-50")} aria-hidden />
-          <span className="text-xs font-semibold uppercase tracking-wider text-record">{stateLabel}</span>
-          <span className="ml-2 font-mono text-sm tabular-nums text-foreground">{formatElapsed(elapsedMs)}</span>
+          <span className="text-xs font-semibold uppercase tracking-wider text-record">
+            {stateLabel}
+          </span>
+          <span className="ml-2 font-mono text-sm tabular-nums text-foreground">
+            {formatElapsed(elapsedMs)}
+          </span>
         </div>
 
         <div className="h-6 w-px bg-border" />

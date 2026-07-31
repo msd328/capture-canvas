@@ -13,11 +13,7 @@ function removeLegacyTsconfigPaths(
     if (Array.isArray(plugin)) {
       return removeLegacyTsconfigPaths(plugin) ?? [];
     }
-    if (
-      typeof plugin === "object" &&
-      "name" in plugin &&
-      plugin.name === "vite-tsconfig-paths"
-    ) {
+    if (typeof plugin === "object" && "name" in plugin && plugin.name === "vite-tsconfig-paths") {
       return [];
     }
     return [plugin];
@@ -32,9 +28,7 @@ const lovableConfig = defineConfig({
   },
 });
 
-export default async (
-  ...args: Parameters<typeof lovableConfig>
-): Promise<UserConfig> => {
+export default async (...args: Parameters<typeof lovableConfig>): Promise<UserConfig> => {
   const config = await lovableConfig(...args);
 
   return {

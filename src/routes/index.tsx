@@ -16,7 +16,11 @@ export const Route = createFileRoute("/")({
   head: () => ({
     meta: [
       { title: "Recorder — Capture your screen, beautifully" },
-      { name: "description", content: "A premium, minimal desktop screen recorder. Capture displays, windows, camera, and audio, then save locally as MP4." },
+      {
+        name: "description",
+        content:
+          "A premium, minimal desktop screen recorder. Capture displays, windows, camera, and audio, then save locally as MP4.",
+      },
       { property: "og:title", content: "Recorder — Capture your screen, beautifully" },
       { property: "og:description", content: "A premium, minimal desktop screen recorder." },
       { property: "og:type", content: "website" },
@@ -45,7 +49,9 @@ function RecorderPage() {
       if (!micId) setMicId(s.defaultMicrophoneId);
       if (!cameraId) setCameraId(s.defaultCameraId);
     });
-    getSystemAudioSupported().then(setSystemAudioSupported).catch(() => setSystemAudioSupported(false));
+    getSystemAudioSupported()
+      .then(setSystemAudioSupported)
+      .catch(() => setSystemAudioSupported(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -83,8 +89,12 @@ function RecorderPage() {
         <div className="inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-xs text-muted-foreground">
           <Sparkles className="size-3" /> Phase 1 · Local recording
         </div>
-        <h1 className="mt-3 text-3xl font-semibold tracking-tight text-foreground">New recording</h1>
-        <p className="mt-1 text-sm text-muted-foreground">Choose a source, set up your audio and camera, then press record.</p>
+        <h1 className="mt-3 text-3xl font-semibold tracking-tight text-foreground">
+          New recording
+        </h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Choose a source, set up your audio and camera, then press record.
+        </p>
       </div>
 
       <section className="mb-6 surface-card p-6">
@@ -92,7 +102,8 @@ function RecorderPage() {
           <h2 className="text-sm font-semibold text-foreground">Screen</h2>
           {target && (
             <span className="rounded-full bg-muted px-2.5 py-0.5 text-xs text-muted-foreground">
-              {cropRegion ? "Selected area" : target.kind === "display" ? "Display" : "Window"} selected
+              {cropRegion ? "Selected area" : target.kind === "display" ? "Display" : "Window"}{" "}
+              selected
             </span>
           )}
         </div>
@@ -144,10 +155,18 @@ function RecorderPage() {
               <Circle className="size-2 fill-current" />
             </span>
           )}
-          <span className="text-base font-semibold">{starting ? "Starting…" : "Start Recording"}</span>
+          <span className="text-base font-semibold">
+            {starting ? "Starting…" : "Start Recording"}
+          </span>
         </Button>
-        {!target && <p className="text-xs text-muted-foreground">Select a screen or window to enable recording.</p>}
-        {recorder.error && <p className="text-xs text-destructive">Error: {recorder.error.message}</p>}
+        {!target && (
+          <p className="text-xs text-muted-foreground">
+            Select a screen or window to enable recording.
+          </p>
+        )}
+        {recorder.error && (
+          <p className="text-xs text-destructive">Error: {recorder.error.message}</p>
+        )}
       </div>
 
       {showFloating && (
