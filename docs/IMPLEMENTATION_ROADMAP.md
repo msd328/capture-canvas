@@ -22,16 +22,16 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Pull the automatic library-refresh batch, run `scripts/windows-local-check.ps1`, and confirm the library thumbnail replaces its placeholder without navigation or restart.
+1. Pull the SaaS auth-foundation batch, run `scripts/windows-local-check.ps1`, and validate **Settings → Cloud account → Check secure storage** on Windows.
 2. Repeat Pause/Resume and confirm native `FinalizerHealth` success or bounded `FallbackHealth` output plus final candidate publication.
 3. Check the first Windows CI run and resolve any remaining frontend, formatting, test, dependency-lock or Windows compilation failures.
-4. Run one single-segment recording and capture `ThumbnailHealth` plus `LibraryHealth` to confirm native thumbnail completion and revision notification.
-5. Validate the stale/recent/final-file cleanup matrix, including stale `.ffmpeg-finalizing-*` candidates.
-6. Begin the mid-August SaaS MVP foundation: architecture decision, authentication contract, upload-session model and secure desktop token-storage design.
-7. Validate CSP, restricted asset playback, the main-window capability, and plugin removal on Windows.
-8. Run the 60-second mostly-static full-source and selected-area duration matrix.
-9. Validate camera, submitted A/V drift, and audio-mixer health with camera + microphone + system audio.
-10. Remove the remaining FFmpeg compatibility paths.
+4. Select the real SaaS API origin and OIDC provider; add only the chosen HTTPS origin to CSP before enabling desktop cloud traffic.
+5. Implement native OIDC authorization-code/PKCE transaction handling, state/nonce verification, token exchange, rotation, logout and revocation.
+6. Implement the authenticated upload-session API and direct object-storage adapter from the shared upload contracts.
+7. Capture `ThumbnailHealth` plus `LibraryHealth` evidence for the now-validated live Library refresh path.
+8. Validate the stale/recent/final-file cleanup matrix, including stale `.ffmpeg-finalizing-*` candidates.
+9. Run the 60-second mostly-static full-source and selected-area duration matrix.
+10. Validate camera, submitted A/V drift, and audio-mixer health with camera + microphone + system audio.
 
 ---
 
@@ -156,7 +156,8 @@ Every implementation update must also include the security-impact block defined 
 | HLT-22 | 🟡 | Startup orphan-cleanup summary and safety counters | `CleanupHealth` recognises part/mixed/system/native-finalizer and FFmpeg-finalizer candidates; stale/recent/final-file Windows matrix remains pending |
 | HLT-23 | 🟡 | Native file-open and clip-decode timeout/cancellation outcome | Windows compiler accepted bounded open/decode waits and diagnostics; forced timeout/cancellation runtime evidence remains pending |
 | HLT-24 | 🟡 | FFmpeg fallback timeout, termination, candidate and publication health | `FallbackHealth` reports segment validation, spawn, in-memory manifest submission, process exit/timeout, kill/reap, candidate validation, publish retries and cleanup deferral; Windows fallback runtime pending |
-| HLT-25 | 🟡 | Library revision and persisted-update notification health | `LibraryHealth` emits only a fixed change reason and monotonic revision; Windows live-refresh evidence pending |
+| HLT-25 | 🟡 | Library revision and persisted-update notification health | Live Library refresh was confirmed working on Windows; exact path-free `LibraryHealth` log evidence remains pending |
+| HLT-26 | 🟡 | Native secure-auth storage status and readiness health | `AuthHealth` emits only stage, support, status, result and numeric error code fields; Windows compile/probe evidence pending |
 
 ## Recording library
 
@@ -169,7 +170,7 @@ Every implementation update must also include the security-impact block defined 
 | LIB-05 | ✅ | Open recording location | Explorer selects file |
 | LIB-06 | 🟡 | Native Windows video thumbnails | Normal-path conversion, bounded retries, typed path-free failure stages and worker timing diagnostics are implemented; rerun pending |
 | LIB-07 | 🟡 | Background thumbnail backfill | Per-item failure stages and generated/failed totals implemented; existing-library validation pending |
-| LIB-08 | 🟡 | Automatic UI refresh after thumbnail completion | Revision snapshots and a fixed 25-second local wait refresh persisted recording, rename, delete and thumbnail changes without navigation; Windows runtime validation pending |
+| LIB-08 | ✅ | Automatic UI refresh after thumbnail completion | User confirmed on Windows that the Library updates without navigation or restart after the revision-snapshot batch |
 | LIB-09 | 🔵 | Search and sorting | Title/date/duration sorting |
 | LIB-10 | ⚪ | Folders and collections | Organisational UI |
 | LIB-11 | ⚪ | Recording details panel | Technical/media metadata |
@@ -193,7 +194,7 @@ Every implementation update must also include the security-impact block defined 
 | REL-11 | 🔵 | Crash-recovery metadata | Active session journal |
 | REL-12 | ⚪ | Recover playable output after crash | Recovery workflow |
 | REL-13 | ⚪ | Diagnostic log rotation | Bounded log storage |
-| REL-14 | 🟡 | Windows CI build/test gate | Complete Windows local validation passed on 2026-07-31 through frozen Bun install, lint, production frontend build, Rust formatting, tests and Windows cargo check; zero-warning rerun and first green hosted run remain pending |
+| REL-14 | 🟡 | Windows CI build/test gate | Complete Windows local validation passed on 2026-07-31 through frozen Bun install, lint, production frontend build, Rust formatting, tests and Windows cargo check; first green hosted run remains pending |
 
 ## Desktop UX
 
@@ -257,10 +258,10 @@ The detailed policy, trust boundaries, current data inventory, and mandatory sta
 | SEC-06 | 🟡 | Comprehensive Rust command-input validation and limits | UUID, title, FPS, device ID, output-path and settings validation added; dimensions/crops/source IDs/negative test suite remain |
 | SEC-07 | 🔵 | Remove or authenticate external executable discovery | Production never executes an unverified PATH/environment-selected FFmpeg binary |
 | SEC-08 | 🟡 | Structured diagnostic-log privacy and redaction | `FallbackHealth` and `FinalizationHealth` add only stage, timing, counts, process outcome and file-size fields; free-form backend errors and exported reports still require review |
-| SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot, Windows CI, stable line-ending policy and a successful complete Windows local validation cycle are present; zero-warning rerun and first green hosted dependency/CI cycle remain pending |
+| SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot, Windows CI, stable line-ending policy and a successful complete Windows local validation cycle are present; first green hosted dependency/CI cycle remains pending |
 | SEC-10 | 🔵 | Secret scanning and repository protection | Secret scanning enabled; test secret is blocked or detected without entering history |
 | SEC-11 | ⚪ | Signed executable, installer, updater, and update metadata | Signature verification passes on a clean machine |
-| SEC-12 | ⚪ | OS secure storage for future account tokens | Tokens use Windows Credential Manager/macOS Keychain and never JSON/localStorage/logs |
+| SEC-12 | 🟡 | OS secure storage for future account tokens | Windows Credential Manager status/probe/clear boundary is implemented with fixed targets and no secret-return command; Windows runtime and macOS Keychain support remain |
 | SEC-13 | ⚪ | SaaS authentication, object authorisation, tenancy, and rate-limit tests | Cross-user/cross-workspace access attempts are rejected server-side |
 | SEC-14 | ⚪ | Optional encrypted local recording storage | Keys are protected by the OS and recovery/deletion behaviour is documented |
 | SEC-15 | ⚪ | Independent penetration test and remediation verification | High/critical findings resolved before public release |
@@ -271,8 +272,8 @@ The mid-August target is a focused desktop + SaaS MVP. Authentication, secure de
 
 | ID | Status | Work |
 |---|---:|---|
-| SAAS-01 | 🔵 | Authentication |
-| SAAS-02 | 🔵 | Secure desktop token storage |
+| SAAS-01 | 🟡 | Provider-neutral OIDC/PKCE, visibility and upload metadata contracts; provider selection and native token exchange pending |
+| SAAS-02 | 🟡 | Windows Credential Manager readiness/status/clear boundary; Windows validation and real login integration pending |
 | SAAS-03 | 🔵 | Resumable uploads |
 | SAAS-04 | 🔵 | Upload progress/retry |
 | SAAS-05 | 🔵 | Shareable links |
@@ -349,3 +350,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-31 | `61ff6f5..5b6d015` | Added explicit cross-platform line-ending policy, actionable Windows validation failures and recorded the 6,899-error Prettier baseline; REL-14 and SEC-09 remain 🟡 pending frontend normalization and a green run |
 | 2026-07-31 | `dccc925..25393d1` | Fixed camera preview cleanup ownership, allowed six stable Fast Refresh helper exports and recorded a successful complete Windows local gate; REL-14 and SEC-09 remain 🟡 pending a zero-warning rerun and hosted CI |
 | 2026-07-31 | `51baedd..fa7e0e9` | Added bounded library revision snapshots, persisted-change notifications and automatic UI refresh; LIB-08 and HLT-25 → 🟡 pending Windows validation |
+| 2026-07-31 | `da131b3..0f83836` | Added provider-neutral OIDC/upload contracts, disabled-by-default SaaS configuration, Windows Credential Manager readiness commands and Settings UI; LIB-08 → ✅, SAAS-01/02, SEC-12 and HLT-26 → 🟡 |
