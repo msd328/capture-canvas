@@ -48,9 +48,11 @@ export function CameraSelector({
   }, []);
 
   useEffect(() => {
+    const video = videoRef.current;
+
     if (!enabled || !cameraId || !previewActive || !desktop.isDesktop()) {
       setPreviewError(null);
-      if (videoRef.current) videoRef.current.srcObject = null;
+      if (video) video.srcObject = null;
       return;
     }
 
@@ -90,9 +92,9 @@ export function CameraSelector({
           stream.getTracks().forEach((track) => track.stop());
           return;
         }
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play().catch(() => undefined);
+        if (video) {
+          video.srcObject = stream;
+          await video.play().catch(() => undefined);
         }
         setPreviewError(null);
       } catch (error) {
@@ -105,7 +107,7 @@ export function CameraSelector({
     void startPreview();
     return () => {
       cancelled = true;
-      if (videoRef.current) videoRef.current.srcObject = null;
+      if (video) video.srcObject = null;
       stream?.getTracks().forEach((track) => track.stop());
     };
   }, [enabled, cameraId, previewActive, cameras]);
