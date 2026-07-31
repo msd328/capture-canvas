@@ -6,7 +6,7 @@ The user confirmed that the automatic Library refresh is working on Windows afte
 
 ## Scope
 
-This batch establishes the first provider-neutral SaaS boundary without enabling cloud traffic or handling a real account token.
+This batch establishes the first provider-neutral SaaS and native-auth boundary without handling a real account token or accepting a video upload.
 
 ### Native desktop boundary
 
@@ -21,27 +21,28 @@ This batch establishes the first provider-neutral SaaS boundary without enabling
 - Added no command that returns secret bytes to React.
 - Added no command that accepts or persists a real refresh token yet.
 
-### Shared SaaS contract
+### Canonical SaaS contract and server boundary
 
+- Consolidated the shared contract under `src/saas/contracts.ts`.
 - Added strict Zod contracts for OIDC authorization callbacks and PKCE transactions.
-- Added private, unlisted, and public visibility values.
-- Added bounded MP4 upload-initiation metadata including recording UUID, size, duration, SHA-256, title, and visibility.
-- Added multipart upload-session and ordered completion-part contracts.
-- Added cloud-recording metadata states.
-- Added a server-only configuration reader for API origin, OIDC issuer, client ID, and redirect URI.
-- Missing configuration keeps SaaS disabled instead of guessing an endpoint.
-- Non-local API and issuer URLs must use HTTPS.
+- Added authenticated-user, private/unlisted/public visibility, cloud-recording, upload-initiation, resumable upload-session, capability and structured-error contracts.
+- Bounded UUIDs, titles, MP4 content type, file size, duration, lowercase SHA-256, URLs, headers and protocol values.
+- Added same-origin `/api/v1/health` and `/api/v1/capabilities` responses.
+- Reserved `/api/v1/upload-sessions` fails closed with `503 not_configured`, then `501 not_implemented` after configuration until authenticated storage signing exists.
+- Provider-neutral environment detection uses `RECORDER_AUTH_ISSUER`, `RECORDER_AUTH_AUDIENCE`, `RECORDER_UPLOAD_ORIGIN`, `RECORDER_UPLOAD_BUCKET`, and optional `RECORDER_MAX_UPLOAD_BYTES`.
+- Issuer and upload origins count as configured only when they are valid HTTPS URLs.
+- Capability responses expose booleans and limits, not provider URLs, audience, bucket names or credentials.
 
 ### Settings readiness UI
 
 - Added a Cloud account settings card.
 - Added a secure-storage readiness button.
 - Added local-session status and a clear-session action.
-- The panel explicitly states that identity-provider and API endpoints are not configured.
+- The panel explicitly states that identity-provider and API endpoints are not configured for the desktop client.
 
 ## Network and CSP boundary
 
-The production Tauri CSP still permits only local IPC communication. No external HTTPS origin was added. The desktop cannot make a cloud request until a real API origin is selected and deliberately added to the CSP.
+The server runtime now has same-origin, read-only health and capability endpoints. No outbound network request was added. The production Tauri CSP still permits only local IPC communication, so the packaged desktop cannot call a cloud origin until a real HTTPS API origin is selected and deliberately added to CSP.
 
 ## Expected Windows evidence
 
@@ -65,8 +66,11 @@ The Settings page should show `Windows Credential Manager ready` and `No cloud s
 
 ```text
 LIB-08   ✅  Automatic Library refresh confirmed working by the user on Windows
-SAAS-01  🟡  OIDC/PKCE, visibility and upload-session contracts implemented; provider and exchange runtime pending
+SAAS-01  🟡  OIDC/PKCE and capability contracts implemented; provider and exchange runtime pending
 SAAS-02  🟡  Windows secure-store status/probe/clear boundary implemented; Windows compile/probe and real login integration pending
+SAAS-03  🟡  Bounded resumable upload-session contract and fail-closed endpoint reserved; authenticated storage adapter pending
+SAAS-06  🟡  Private/unlisted/public contract implemented; server-side authorisation pending
+SAAS-08  🟡  Cloud recording metadata contract implemented; persistence and cloud library pending
 SEC-12   🟡  Refresh-token storage boundary targets Windows Credential Manager and exposes no secret-return command; runtime validation pending
 HLT-26   🟡  Path-free AuthHealth status/probe/clear diagnostics implemented; Windows evidence pending
 ```
@@ -75,16 +79,16 @@ HLT-26   🟡  Path-free AuthHealth status/probe/clear diagnostics implemented; 
 
 ```text
 Security impact:
-Added a native secret-storage boundary for future authentication and strict data contracts for future upload requests. Cloud access remains disabled and no real credential is accepted by the current command surface.
+Added a native secret-storage boundary for future authentication, strict shared SaaS contracts, and fail-closed same-origin capability endpoints. No real credential is accepted by the current Tauri command surface, and upload creation does not yet accept media or issue a signed URL.
 
 Data accessed:
-A fixed Recorder-owned generic credential target in the current Windows user's Credential Manager, random probe bytes, existing non-secret settings UI state, and future upload metadata contract fields.
+A fixed Recorder-owned generic credential target in the current Windows user's Credential Manager, random probe bytes, non-secret settings UI state, deployment configuration used only to compute capabilities, request method/path, and future upload metadata contract fields.
 
 Data written:
-A random temporary probe credential during an explicit readiness check. The probe is read back and deletion is attempted before the command returns. No real account credential is written by this batch.
+A random temporary probe credential during an explicit readiness check. The probe is read back and deletion is attempted before the command returns. No real account credential or cloud data is written by this batch.
 
 Network communication added:
-None. Production and development CSP rules were not expanded for a SaaS origin.
+Two same-origin read-only server endpoints are available when the server runtime is deployed. No outbound request or desktop cloud origin was added.
 
 New permissions/capabilities:
 Enabled the existing windows-rs `Win32_Security_Credentials` API projection. No new Tauri plugin or capability was added.
@@ -93,17 +97,17 @@ External processes:
 None.
 
 Untrusted inputs:
-Future OIDC callback values, upload metadata, multipart part lists, environment configuration, and Credential Manager records. Zod contracts bound string lengths, UUIDs, URLs, sizes, duration, hashes, part counts and ordering. The native status/clear/probe commands accept no user-provided secret or credential target.
+Future OIDC callback values, upload metadata, environment configuration, Credential Manager records, and `/api/v1` request method/path. Zod contracts bound string lengths, UUIDs, URLs, sizes, duration, hashes and header values. Current upload-session handling consumes no request body. Native status/clear/probe commands accept no user-provided secret or credential target.
 
 Validation added:
-A random secure-store round-trip probe; a Rust credential-size unit test; strict SaaS schemas; HTTPS enforcement for non-local configured endpoints; disabled-by-default server configuration; and non-secret AuthHealth diagnostics.
+A random secure-store round-trip probe; a Rust credential-size unit test; strict SaaS schemas; HTTPS-only configuration detection; fail-closed capability/upload behavior; no-store JSON; `nosniff`; and non-secret AuthHealth diagnostics.
 
 Secrets involved:
-Only random probe bytes in this batch. Future refresh tokens are designated for the fixed Windows Credential Manager target and must never be returned to React, JSON, localStorage, logs, or URLs.
+Only random probe bytes in the native batch. Future refresh tokens are designated for the fixed Windows Credential Manager target and must never be returned to React, JSON, localStorage, logs or URLs. Deployment configuration values are never returned by capability responses.
 
 Security tests completed:
-Static review of fixed credential targets, secret-return prevention, probe cleanup ordering, Credential Manager buffer freeing, size limits, path-free logs, disabled network configuration and unchanged CSP.
+Static review of fixed credential targets, secret-return prevention, probe cleanup ordering, Credential Manager buffer freeing, size limits, path-free logs, environment-value non-disclosure, SSR route isolation, fail-closed uploads and unchanged desktop CSP.
 
 Remaining risks:
-Windows compilation and Credential Manager runtime behaviour remain unvalidated. A failed credential deletion can leave random probe bytes under the dedicated probe target. OIDC state/nonce/PKCE generation, callback interception, token exchange, refresh rotation, logout revocation, API-origin allowlisting, server-side authorisation, upload ownership checks, quotas and rate limits are not implemented. Credential Manager protects data within the Windows account boundary but does not protect against a process already running as the same user. macOS secure storage remains unsupported.
+Windows compilation and Credential Manager runtime behaviour remain unvalidated. A failed credential deletion can leave random probe bytes under the dedicated probe target. OIDC state/nonce/PKCE generation, callback interception, token exchange, signature/issuer/audience verification, refresh rotation, logout revocation, API-origin allowlisting, database tenancy, upload signing, object-key ownership, request-body enforcement, quotas and rate limits are not implemented. Credential Manager protects data within the Windows account boundary but does not protect against a process already running as the same user. macOS secure storage remains unsupported.
 ```
