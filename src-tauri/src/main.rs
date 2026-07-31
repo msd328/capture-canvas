@@ -49,6 +49,8 @@ fn main() {
             commands::recording::resume_recording,
             commands::recording::stop_recording,
             commands::library::get_recordings,
+            commands::library::get_library_snapshot,
+            commands::library::wait_for_library_update,
             commands::library::get_recording,
             commands::library::delete_recording,
             commands::library::rename_recording,
