@@ -14,8 +14,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const MAX_CREDENTIAL_BYTES: usize = 5 * 512;
-const OIDC_TRANSACTION_TTL: Duration = Duration::from_secs(10 * 60);
-const OIDC_TRANSACTION_TTL_SECONDS: u64 = OIDC_TRANSACTION_TTL.as_secs();
+const OIDC_TRANSACTION_TTL_SECONDS: u64 = 10 * 60;
+const OIDC_TRANSACTION_TTL: Duration = Duration::from_secs(OIDC_TRANSACTION_TTL_SECONDS);
 const OIDC_TOKEN_BYTES: usize = 32;
 
 #[derive(Clone)]
@@ -65,7 +65,7 @@ impl Drop for SecretBytes {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum OidcConsumeError {
     Missing,
     Expired,
@@ -126,9 +126,8 @@ impl AuthState {
         let nonce = random_protocol_token();
         let verifier = random_protocol_token();
         let code_challenge = pkce_s256_challenge(verifier.as_bytes());
-        let expires_at = now_utc
-            + chrono::Duration::from_std(OIDC_TRANSACTION_TTL)
-                .expect("OIDC transaction TTL must fit chrono duration");
+        let expires_at =
+            now_utc + chrono::Duration::seconds(OIDC_TRANSACTION_TTL_SECONDS as i64);
 
         self.pending_oidc = Some(PendingOidcTransaction {
             state: state.clone(),
@@ -195,10 +194,9 @@ impl AuthState {
             return Err(OidcConsumeError::StateMismatch);
         }
 
-        let pending = self
-            .pending_oidc
-            .take()
-            .expect("pending OIDC transaction was checked above");
+        let Some(pending) = self.pending_oidc.take() else {
+            return Err(OidcConsumeError::Missing);
+        };
         Ok(ConsumedOidcTransaction {
             nonce: pending.nonce,
             code_verifier: pending.code_verifier,
