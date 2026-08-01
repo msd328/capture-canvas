@@ -40,6 +40,7 @@ function SettingsPage() {
   const [authStatusError, setAuthStatusError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [checkingSecureStore, setCheckingSecureStore] = useState(false);
+  const [checkingSignInSecurity, setCheckingSignInSecurity] = useState(false);
   const [clearingSession, setClearingSession] = useState(false);
 
   useEffect(() => {
@@ -113,6 +114,28 @@ function SettingsPage() {
       toast.error(error instanceof Error ? error.message : "Secure storage check failed");
     } finally {
       setCheckingSecureStore(false);
+    }
+  };
+
+  const checkSignInSecurity = async () => {
+    setCheckingSignInSecurity(true);
+    try {
+      const probe = await desktop.probeOidcTransaction();
+      const passed =
+        probe.s256Ready &&
+        probe.stateRoundTripOk &&
+        probe.nonceRetained &&
+        probe.replayRejected &&
+        probe.verifierKeptNative;
+      if (passed) {
+        toast.success("Local PKCE and one-time sign-in state checks passed");
+      } else {
+        toast.error("Sign-in security checks did not pass");
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Sign-in security check failed");
+    } finally {
+      setCheckingSignInSecurity(false);
     }
   };
 
@@ -248,7 +271,8 @@ function SettingsPage() {
             </div>
             <p className="text-xs text-muted-foreground">
               The identity provider and API origin are not configured yet. Recorder will not make a
-              cloud request until those endpoints are selected and explicitly allowed.
+              cloud request until those endpoints are selected and explicitly allowed. PKCE
+              verifiers stay inside the native process and expire after ten minutes.
             </p>
             <div className="flex flex-wrap justify-end gap-2">
               {authStatus?.signedIn ? (
@@ -262,6 +286,15 @@ function SettingsPage() {
                   {clearingSession ? "Clearing…" : "Clear local session"}
                 </Button>
               ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={checkingSignInSecurity}
+                onClick={checkSignInSecurity}
+              >
+                {checkingSignInSecurity ? "Checking…" : "Check sign-in security"}
+              </Button>
               <Button
                 type="button"
                 variant="outline"
