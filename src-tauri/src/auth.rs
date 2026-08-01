@@ -126,8 +126,7 @@ impl AuthState {
         let nonce = random_protocol_token();
         let verifier = random_protocol_token();
         let code_challenge = pkce_s256_challenge(verifier.as_bytes());
-        let expires_at =
-            now_utc + chrono::Duration::seconds(OIDC_TRANSACTION_TTL_SECONDS as i64);
+        let expires_at = now_utc + chrono::Duration::seconds(OIDC_TRANSACTION_TTL_SECONDS as i64);
 
         self.pending_oidc = Some(PendingOidcTransaction {
             state: state.clone(),
@@ -256,7 +255,8 @@ impl SecureAuthStore {
             )?;
 
             let read_result = windows_store::read_secret(windows_store::CredentialTarget::Probe);
-            let delete_result = windows_store::delete_secret(windows_store::CredentialTarget::Probe);
+            let delete_result =
+                windows_store::delete_secret(windows_store::CredentialTarget::Probe);
 
             let stored = read_result?;
             delete_result?;
