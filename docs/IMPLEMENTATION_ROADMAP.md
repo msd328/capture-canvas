@@ -22,11 +22,11 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Pull the bounded SaaS request boundary, run `scripts/windows-local-check.ps1`, validate **Settings → Cloud account → Check secure storage**, and verify the `/api/v1/upload-sessions` rejection matrix.
+1. Pull the native OIDC transaction batch, run `scripts/windows-local-check.ps1`, and validate **Settings → Cloud account → Check secure storage** plus **Check sign-in security**.
 2. Repeat Pause/Resume and confirm native `FinalizerHealth` success or bounded `FallbackHealth` output plus final candidate publication.
 3. Check the first Windows CI run and resolve any remaining frontend, formatting, test, dependency-lock or Windows compilation failures.
 4. Select the real SaaS API origin and OIDC provider; add only the chosen HTTPS origin to CSP before enabling desktop cloud traffic.
-5. Implement native OIDC authorization-code/PKCE transaction handling, state/nonce verification, token exchange, rotation, logout and revocation.
+5. Build the provider authorization URL, native callback interception, atomic authorization-code exchange, ID-token nonce validation, refresh rotation, logout and revocation.
 6. Implement signed-token verification, owner-derived cloud records, authenticated upload-session creation and the direct object-storage adapter.
 7. Capture `ThumbnailHealth` plus `LibraryHealth` evidence for the now-validated live Library refresh path.
 8. Validate the stale/recent/final-file cleanup matrix, including stale `.ffmpeg-finalizing-*` candidates.
@@ -158,6 +158,7 @@ Every implementation update must also include the security-impact block defined 
 | HLT-24 | 🟡 | FFmpeg fallback timeout, termination, candidate and publication health | `FallbackHealth` reports segment validation, spawn, in-memory manifest submission, process exit/timeout, kill/reap, candidate validation, publish retries and cleanup deferral; Windows fallback runtime pending |
 | HLT-25 | 🟡 | Library revision and persisted-update notification health | Live Library refresh was confirmed working on Windows; exact path-free `LibraryHealth` log evidence remains pending |
 | HLT-26 | 🟡 | Native secure-auth storage status and readiness health | `AuthHealth` emits only stage, support, status, result and numeric error code fields; Windows compile/probe evidence pending |
+| HLT-27 | 🟡 | Native OIDC transaction lifecycle health | Secret-free prepare/status/cancel/probe diagnostics report expiry, S256 readiness, state round-trip, nonce retention, replay rejection and native verifier handling; Windows runtime evidence pending |
 
 ## Recording library
 
@@ -261,8 +262,8 @@ The detailed policy, trust boundaries, current data inventory, and mandatory sta
 | SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot, Windows CI, stable line-ending policy and a successful complete Windows local validation cycle are present; first green hosted dependency/CI cycle remains pending |
 | SEC-10 | 🔵 | Secret scanning and repository protection | Secret scanning enabled; test secret is blocked or detected without entering history |
 | SEC-11 | ⚪ | Signed executable, installer, updater, and update metadata | Signature verification passes on a clean machine |
-| SEC-12 | 🟡 | OS secure storage for future account tokens | Windows Credential Manager status/probe/clear boundary is implemented with fixed targets and no secret-return command; Windows runtime and macOS Keychain support remain |
-| SEC-13 | ⚪ | SaaS authentication, object authorisation, tenancy, and rate-limit tests | Request parsing is bounded and fail-closed; signed-token verification, ownership, cross-user rejection and rate limits remain unimplemented |
+| SEC-12 | 🟡 | OS secure storage for future account tokens | Windows Credential Manager status/probe/clear is present; the PKCE verifier now stays native, transient and non-serializable with best-effort overwrite; Windows runtime, real token rotation and macOS Keychain support remain |
+| SEC-13 | ⚪ | SaaS authentication, object authorisation, tenancy, and rate-limit tests | Bounded requests plus local OIDC expiry/one-time state and replay rejection are present; signed-token verification, ID-token nonce claims, ownership, cross-user rejection and rate limits remain unimplemented |
 | SEC-14 | ⚪ | Optional encrypted local recording storage | Keys are protected by the OS and recovery/deletion behaviour is documented |
 | SEC-15 | ⚪ | Independent penetration test and remediation verification | High/critical findings resolved before public release |
 
@@ -272,8 +273,8 @@ The mid-August target is a focused desktop + SaaS MVP. Authentication, secure de
 
 | ID | Status | Work |
 |---|---:|---|
-| SAAS-01 | 🟡 | Provider-neutral OIDC/PKCE, capability, visibility and upload metadata contracts; provider selection and native token exchange pending |
-| SAAS-02 | 🟡 | Windows Credential Manager readiness/status/clear boundary and failure-isolated Settings UI; Windows validation and real login integration pending |
+| SAAS-01 | 🟡 | Provider-neutral OIDC/PKCE contracts plus native ten-minute state/nonce/S256 transaction generation and one-time consumption are implemented; provider URL, callback interception, token exchange and ID-token validation remain |
+| SAAS-02 | 🟡 | Windows Credential Manager readiness/status/clear plus a transient native-only PKCE verifier boundary and failure-isolated Settings checks are implemented; Windows validation and real refresh-token write/rotation remain |
 | SAAS-03 | 🟡 | Resumable uploads | Upload-session metadata is limited to 64 KiB, must arrive within ten seconds, uses strict UTF-8/JSON/Zod validation and still fails closed; authenticated object-storage adapter pending |
 | SAAS-04 | 🔵 | Upload progress/retry |
 | SAAS-05 | 🔵 | Shareable links |
@@ -354,3 +355,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-07-31 | `b219b02..2a20e70` | Added versioned SaaS API contracts, fail-closed health/capability routing and a reserved upload-session boundary; SAAS-03/06/08 → 🟡 pending build/runtime and authenticated-adapter validation |
 | 2026-07-31 | `71c4bf3..03146e1` | Isolated secure-auth readiness failures from recorder/device settings; SAAS-02 remains 🟡 pending Windows compile and Credential Manager probe evidence |
 | 2026-07-31 | `16cb8b7..1f52838` | Added method/media-type checks, a 64 KiB byte ceiling, ten-second body deadline, strict UTF-8/JSON/Zod validation and fail-closed upload-session rejection; SAAS-03 remains 🟡 and SEC-13 remains ⚪ |
+| 2026-08-01 | `c0539a8..384d8b0` | Added native ten-minute OIDC state/nonce/S256 transaction state, native-only verifier handling, expiry/replay tests, secret-free readiness diagnostics and Settings validation; SAAS-01/02, SEC-12 and HLT-27 → 🟡 while SEC-13 remains ⚪ |
