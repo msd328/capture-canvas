@@ -10,7 +10,13 @@ import type {
   RecordingOutput,
   WindowInfo,
 } from "@/types/recorder";
-import type { SecureAuthProbe, SecureAuthStatus } from "@/types/saas";
+import type {
+  OidcAuthorizationPreparation,
+  OidcTransactionProbe,
+  OidcTransactionStatus,
+  SecureAuthProbe,
+  SecureAuthStatus,
+} from "@/types/saas";
 import * as mock from "./mock-desktop";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -66,6 +72,24 @@ export const probeSecureAuthStore = () =>
   }));
 export const clearSecureAuthSession = () =>
   call<void>("clear_secure_auth_session", undefined, async () => undefined);
+export const prepareOidcTransaction = () =>
+  call<OidcAuthorizationPreparation>("prepare_oidc_transaction");
+export const getOidcTransactionStatus = () =>
+  call<OidcTransactionStatus>("get_oidc_transaction_status", undefined, async () => ({
+    pending: false,
+    expiresAt: null,
+    expiresInSeconds: 0,
+  }));
+export const cancelOidcTransaction = () =>
+  call<void>("cancel_oidc_transaction", undefined, async () => undefined);
+export const probeOidcTransaction = () =>
+  call<OidcTransactionProbe>("probe_oidc_transaction", undefined, async () => ({
+    s256Ready: false,
+    stateRoundTripOk: false,
+    nonceRetained: false,
+    replayRejected: false,
+    verifierKeptNative: false,
+  }));
 
 export const listDisplays = () =>
   call<DisplayInfo[]>("list_displays", undefined, () => mock.listDisplays());
