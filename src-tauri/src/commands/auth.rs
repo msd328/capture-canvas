@@ -1,8 +1,5 @@
 use crate::{
-    auth::{
-        OidcAuthorizationPreparation, OidcTransactionProbe, OidcTransactionStatus,
-        SecureAuthProbe, SecureAuthStatus,
-    },
+    auth::{OidcTransactionProbe, SecureAuthProbe, SecureAuthStatus},
     oidc::OidcClientStatus,
     oidc_loopback::{OidcCallbackStatus, OidcSignInLaunch},
     state::AppState,
@@ -66,26 +63,6 @@ pub async fn get_oidc_callback_status() -> Result<OidcCallbackStatus, String> {
     tauri::async_runtime::spawn_blocking(crate::oidc_loopback::callback_status)
         .await
         .map_err(|error| worker_error("OIDC callback status", error))
-}
-
-#[tauri::command]
-pub async fn prepare_oidc_transaction(
-    state: State<'_, AppState>,
-) -> Result<OidcAuthorizationPreparation, String> {
-    let store = state.auth.clone();
-    tauri::async_runtime::spawn_blocking(move || store.prepare_oidc_transaction())
-        .await
-        .map_err(|error| worker_error("OIDC prepare", error))
-}
-
-#[tauri::command]
-pub async fn get_oidc_transaction_status(
-    state: State<'_, AppState>,
-) -> Result<OidcTransactionStatus, String> {
-    let store = state.auth.clone();
-    tauri::async_runtime::spawn_blocking(move || store.oidc_transaction_status())
-        .await
-        .map_err(|error| worker_error("OIDC status", error))
 }
 
 #[tauri::command]
