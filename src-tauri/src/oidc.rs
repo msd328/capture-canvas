@@ -8,7 +8,8 @@
 use crate::auth::{OidcAuthorizationPreparation, SecureAuthStore};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use url::{Host, Url};
+use std::net::IpAddr;
+use tauri::Url;
 
 const DEFAULT_SCOPES: &str = "openid profile email offline_access";
 const MAX_AUTHORIZATION_URL_BYTES: usize = 8 * 1024;
@@ -287,11 +288,10 @@ fn validate_redirect_uri(url: &Url) -> Result<CallbackMode, OidcConfigError> {
     }
 
     if url.scheme() == "http" && url.path() == "/oidc/callback" && url.port().is_some() {
-        let loopback = match url.host() {
-            Some(Host::Ipv4(address)) => address.is_loopback(),
-            Some(Host::Ipv6(address)) => address.is_loopback(),
-            _ => false,
-        };
+        let loopback = url
+            .host_str()
+            .and_then(|host| host.parse::<IpAddr>().ok())
+            .is_some_and(|address| address.is_loopback());
         if loopback {
             return Ok(CallbackMode::Loopback);
         }
