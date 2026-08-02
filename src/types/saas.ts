@@ -40,20 +40,6 @@ export interface OidcCallbackStatus {
   expiresAt: string | null;
 }
 
-export interface OidcAuthorizationPreparation {
-  state: string;
-  nonce: string;
-  codeChallenge: string;
-  codeChallengeMethod: "S256";
-  expiresAt: string;
-}
-
-export interface OidcTransactionStatus {
-  pending: boolean;
-  expiresAt: string | null;
-  expiresInSeconds: number;
-}
-
 export interface OidcTransactionProbe {
   s256Ready: boolean;
   stateRoundTripOk: boolean;
