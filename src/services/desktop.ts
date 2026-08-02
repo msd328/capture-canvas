@@ -13,7 +13,9 @@ import type {
 import type {
   OidcAuthorizationPreparation,
   OidcAuthorizationRequest,
+  OidcCallbackStatus,
   OidcClientStatus,
+  OidcSignInLaunch,
   OidcTransactionProbe,
   OidcTransactionStatus,
   SecureAuthProbe,
@@ -83,6 +85,15 @@ export const getOidcClientStatus = () =>
   }));
 export const prepareOidcAuthorization = () =>
   call<OidcAuthorizationRequest>("prepare_oidc_authorization");
+export const startOidcSignIn = () => call<OidcSignInLaunch>("start_oidc_sign_in");
+export const getOidcCallbackStatus = () =>
+  call<OidcCallbackStatus>("get_oidc_callback_status", undefined, async () => ({
+    stage: "idle",
+    pending: false,
+    codeReceived: false,
+    providerError: false,
+    expiresAt: null,
+  }));
 export const prepareOidcTransaction = () =>
   call<OidcAuthorizationPreparation>("prepare_oidc_transaction");
 export const getOidcTransactionStatus = () =>
