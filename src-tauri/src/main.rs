@@ -11,6 +11,7 @@ mod camera;
 mod capture;
 mod commands;
 mod encoding;
+mod oidc;
 // The bounded WinRT wait macro assigns its timeout flag before returning an
 // explicit timeout outcome. Rust reports that macro-local assignment once per
 // expansion even though the outcome carries the correct timeout state. Keep the
@@ -42,6 +43,8 @@ fn main() {
             commands::auth::get_secure_auth_status,
             commands::auth::probe_secure_auth_store,
             commands::auth::clear_secure_auth_session,
+            commands::auth::get_oidc_client_status,
+            commands::auth::prepare_oidc_authorization,
             commands::auth::prepare_oidc_transaction,
             commands::auth::get_oidc_transaction_status,
             commands::auth::cancel_oidc_transaction,
