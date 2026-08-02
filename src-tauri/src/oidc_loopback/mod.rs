@@ -145,7 +145,7 @@ fn parse_loopback_endpoint(raw: &str) -> Result<LoopbackEndpoint, String> {
         .ok_or_else(|| "OIDC loopback callback requires a fixed port".to_string())?;
     let address = url
         .host_str()
-        .and_then(|host| host.parse::<IpAddr>().ok())
+        .and_then(|host| host.trim_matches(['[', ']']).parse::<IpAddr>().ok())
         .filter(IpAddr::is_loopback)
         .ok_or_else(|| "OIDC callback host must be an IP loopback address".to_string())?;
 
@@ -174,7 +174,12 @@ fn run_listener(
                     invalid_callbacks = invalid_callbacks.saturating_add(1);
                 } else {
                     match http::handle_connection(stream, &endpoint, generation) {
-                        Ok(http::ConnectionOutcome::Complete) => return,
+                        Ok(http::ConnectionOutcome::Complete) => {
+                            if !runtime::status().code_received {
+                                store.cancel_oidc_transaction();
+                            }
+                            return;
+                        }
                         Ok(http::ConnectionOutcome::Continue) | Err(_) => {
                             invalid_callbacks = invalid_callbacks.saturating_add(1);
                         }
@@ -216,7 +221,7 @@ fn extract_unique_query_parameter(url: &str, name: &str) -> Option<String> {
     let parsed = Url::parse(url).ok()?;
     let mut values = parsed
         .query_pairs()
-        .filter(|(key, _)| key == name)
+        .filter(|(key, _)| key.as_ref() == name)
         .map(|(_, value)| value.into_owned());
     let first = values.next()?;
     if values.next().is_some() {
