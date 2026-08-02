@@ -118,7 +118,10 @@ function fromEnvironment(env: unknown): SupabaseServerConfig | null {
   if (url.pathname !== "/") {
     throw new SupabaseConfigError("url_path");
   }
-  if (authIssuer.origin !== url.origin || authIssuer.pathname.replace(/\/$/, "") !== "/auth/v1") {
+  if (
+    authIssuer.origin !== url.origin ||
+    authIssuer.pathname.replace(/\/$/, "") !== "/auth/v1"
+  ) {
     throw new SupabaseConfigError("issuer_mismatch");
   }
 
