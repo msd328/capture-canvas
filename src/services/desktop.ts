@@ -79,6 +79,11 @@ export const getOidcClientStatus = () =>
     authorizationEndpointHttps: false,
     callbackMode: null,
     scopeCount: 0,
+    tokenExchangeConfigured: false,
+    tokenEndpointHttps: false,
+    issuerHttps: false,
+    audienceConfigured: false,
+    jwksUriHttps: false,
   }));
 export const startOidcSignIn = () => call<OidcSignInLaunch>("start_oidc_sign_in");
 export const getOidcCallbackStatus = () =>
