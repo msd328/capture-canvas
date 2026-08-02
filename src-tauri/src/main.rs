@@ -47,8 +47,6 @@ fn main() {
             commands::auth::get_oidc_client_status,
             commands::auth::start_oidc_sign_in,
             commands::auth::get_oidc_callback_status,
-            commands::auth::prepare_oidc_transaction,
-            commands::auth::get_oidc_transaction_status,
             commands::auth::cancel_oidc_transaction,
             commands::auth::probe_oidc_transaction,
             commands::devices::list_displays,
