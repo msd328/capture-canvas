@@ -4,6 +4,7 @@ use crate::{
         SecureAuthProbe, SecureAuthStatus,
     },
     oidc::{OidcAuthorizationRequest, OidcClientStatus},
+    oidc_loopback::{OidcCallbackStatus, OidcSignInLaunch},
     state::AppState,
 };
 use tauri::State;
@@ -35,9 +36,12 @@ pub async fn probe_secure_auth_store(
 #[tauri::command]
 pub async fn clear_secure_auth_session(state: State<'_, AppState>) -> Result<(), String> {
     let store = state.auth.clone();
-    tauri::async_runtime::spawn_blocking(move || store.clear())
-        .await
-        .map_err(|error| worker_error("clear", error))?
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::oidc_loopback::cancel_callback();
+        store.clear()
+    })
+    .await
+    .map_err(|error| worker_error("clear", error))?
 }
 
 #[tauri::command]
@@ -55,6 +59,23 @@ pub async fn prepare_oidc_authorization(
     tauri::async_runtime::spawn_blocking(move || crate::oidc::prepare_authorization(&store))
         .await
         .map_err(|error| worker_error("OIDC authorization prepare", error))?
+}
+
+#[tauri::command]
+pub async fn start_oidc_sign_in(
+    state: State<'_, AppState>,
+) -> Result<OidcSignInLaunch, String> {
+    let store = state.auth.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::oidc_loopback::start_sign_in(&store))
+        .await
+        .map_err(|error| worker_error("OIDC sign-in start", error))?
+}
+
+#[tauri::command]
+pub async fn get_oidc_callback_status() -> Result<OidcCallbackStatus, String> {
+    tauri::async_runtime::spawn_blocking(crate::oidc_loopback::callback_status)
+        .await
+        .map_err(|error| worker_error("OIDC callback status", error))
 }
 
 #[tauri::command]
@@ -80,9 +101,12 @@ pub async fn get_oidc_transaction_status(
 #[tauri::command]
 pub async fn cancel_oidc_transaction(state: State<'_, AppState>) -> Result<(), String> {
     let store = state.auth.clone();
-    tauri::async_runtime::spawn_blocking(move || store.cancel_oidc_transaction())
-        .await
-        .map_err(|error| worker_error("OIDC cancel", error))
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::oidc_loopback::cancel_callback();
+        store.cancel_oidc_transaction();
+    })
+    .await
+    .map_err(|error| worker_error("OIDC cancel", error))
 }
 
 #[tauri::command]
