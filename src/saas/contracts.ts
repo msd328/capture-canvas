@@ -100,6 +100,17 @@ export const SaasCapabilitiesSchema = z
         protocol: z.literal("oidc-pkce"),
       })
       .strict(),
+    database: z
+      .object({
+        provider: z.literal("supabase"),
+        configured: z.boolean(),
+        configurationValid: z.boolean(),
+        urlTrusted: z.boolean(),
+        authIssuerTrusted: z.boolean(),
+        audienceConfigured: z.boolean(),
+        serverSecretConfigured: z.boolean(),
+      })
+      .strict(),
     uploads: z
       .object({
         configured: z.boolean(),
