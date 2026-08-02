@@ -11,12 +11,10 @@ import type {
   WindowInfo,
 } from "@/types/recorder";
 import type {
-  OidcAuthorizationPreparation,
   OidcCallbackStatus,
   OidcClientStatus,
   OidcSignInLaunch,
   OidcTransactionProbe,
-  OidcTransactionStatus,
   SecureAuthProbe,
   SecureAuthStatus,
 } from "@/types/saas";
@@ -90,14 +88,6 @@ export const getOidcCallbackStatus = () =>
     codeReceived: false,
     providerError: false,
     expiresAt: null,
-  }));
-export const prepareOidcTransaction = () =>
-  call<OidcAuthorizationPreparation>("prepare_oidc_transaction");
-export const getOidcTransactionStatus = () =>
-  call<OidcTransactionStatus>("get_oidc_transaction_status", undefined, async () => ({
-    pending: false,
-    expiresAt: null,
-    expiresInSeconds: 0,
   }));
 export const cancelOidcTransaction = () =>
   call<void>("cancel_oidc_transaction", undefined, async () => undefined);
