@@ -6,6 +6,7 @@ import {
   SaasCapabilitiesSchema,
   type SaasApiError,
 } from "./contracts";
+import { supabaseReadiness } from "./supabase";
 
 const API_PREFIX = `/api/${SAAS_API_VERSION}`;
 const MIN_CONFIGURED_UPLOAD_BYTES = 1024 * 1024;
@@ -108,14 +109,16 @@ function capabilities(env: unknown) {
   const uploadsConfigured =
     isHttpsUrl(envValue(env, "RECORDER_UPLOAD_ORIGIN")) &&
     Boolean(envValue(env, "RECORDER_UPLOAD_BUCKET"));
+  const database = supabaseReadiness(env);
 
   return SaasCapabilitiesSchema.parse({
     apiVersion: SAAS_API_VERSION,
-    configured: authenticationConfigured && uploadsConfigured,
+    configured: authenticationConfigured && database.configured && uploadsConfigured,
     authentication: {
       configured: authenticationConfigured,
       protocol: "oidc-pkce",
     },
+    database,
     uploads: {
       configured: uploadsConfigured,
       resumable: uploadsConfigured,
@@ -353,7 +356,7 @@ async function handleUploadSessionRequest(
     return errorResponse(
       503,
       "not_configured",
-      "Recorder cloud authentication and upload storage are not configured.",
+      "Recorder cloud authentication, database, and upload storage are not configured.",
     );
   }
 
