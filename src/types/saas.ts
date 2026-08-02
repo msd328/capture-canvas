@@ -23,6 +23,29 @@ export interface OidcAuthorizationRequest {
   callbackMode: "custom-scheme" | "loopback";
 }
 
+export interface OidcSignInLaunch {
+  launched: boolean;
+  callbackMode: "loopback";
+  expiresAt: string;
+}
+
+export type OidcCallbackStage =
+  | "idle"
+  | "waiting"
+  | "codeReceived"
+  | "providerError"
+  | "timedOut"
+  | "cancelled"
+  | "failed";
+
+export interface OidcCallbackStatus {
+  stage: OidcCallbackStage;
+  pending: boolean;
+  codeReceived: boolean;
+  providerError: boolean;
+  expiresAt: string | null;
+}
+
 export interface OidcAuthorizationPreparation {
   state: string;
   nonce: string;
