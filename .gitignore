@@ -16,6 +16,15 @@ dist-ssr
 .nitro
 *.local
 
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+
+# Supabase CLI local/link state
+supabase/.temp/
+supabase/.branches/
+
 # Wrangler / Cloudflare
 .wrangler/
 .dev.vars
