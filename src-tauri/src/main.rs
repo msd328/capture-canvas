@@ -13,6 +13,7 @@ mod commands;
 mod encoding;
 mod oidc;
 mod oidc_loopback;
+mod oidc_token;
 // The bounded WinRT wait macro assigns its timeout flag before returning an
 // explicit timeout outcome. Rust reports that macro-local assignment once per
 // expansion even though the outcome carries the correct timeout state. Keep the
