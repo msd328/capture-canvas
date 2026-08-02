@@ -59,7 +59,7 @@ struct ActiveCallback {
 }
 
 struct NativeAuthorizationGrant {
-    _generation: u64,
+    generation: u64,
     _state: SecretText,
     _authorization_code: SecretText,
     expires_at_instant: Instant,
@@ -142,7 +142,7 @@ impl OidcCallbackRuntime {
         state.active = None;
         state.stage = CallbackStage::CodeReceived;
         state.grant = Some(NativeAuthorizationGrant {
-            _generation: generation,
+            generation,
             _state: SecretText::new(supplied_state),
             _authorization_code: SecretText::new(authorization_code),
             expires_at_instant: Instant::now() + AUTHORIZATION_CODE_TTL,
@@ -205,7 +205,7 @@ impl OidcCallbackRuntime {
             && state
                 .grant
                 .as_ref()
-                .is_some_and(|grant| grant._generation == generation)
+                .is_some_and(|grant| grant.generation == generation)
         {
             state.grant = None;
             state.stage = CallbackStage::TimedOut;
@@ -292,7 +292,7 @@ pub(super) fn accept_code(
 ) -> Result<(), AcceptError> {
     let result = instance().accept_code(generation, supplied_state, authorization_code);
     if result.is_ok() {
-        let _ = std::thread::Builder::new()
+        let expiry_worker = std::thread::Builder::new()
             .name("recorder-oidc-grant-expiry".to_string())
             .spawn(move || {
                 std::thread::sleep(AUTHORIZATION_CODE_TTL);
@@ -302,6 +302,12 @@ pub(super) fn accept_code(
                     );
                 }
             });
+        if expiry_worker.is_err() {
+            let code_cleared = instance().expire_grant(generation);
+            eprintln!(
+                "[Recorder][AuthHealth] stage=oidc_callback_code_expiry ok=false code=spawn_failed code_cleared={code_cleared}"
+            );
+        }
     }
     result
 }
