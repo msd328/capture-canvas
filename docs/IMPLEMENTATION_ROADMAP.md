@@ -23,15 +23,20 @@ Every implementation update must also include the security-impact block defined 
 ## Current focus
 
 1. Pull the pinned OIDC token-contract batch, run `scripts/windows-local-check.ps1`, and validate the unconfigured **Settings → Cloud account** state plus **Check provider configuration**, **Check secure storage**, and **Check sign-in security**.
-2. Repeat Pause/Resume and confirm native `FinalizerHealth` success or bounded `FallbackHealth` output plus final candidate publication.
-3. Check the first Windows CI run and resolve any remaining frontend, formatting, test, dependency-lock or Windows compilation failures.
-4. Select the real SaaS API origin and OIDC provider; register the exact numeric-loopback redirect URI and pin the exact token endpoint, issuer, API audience and JWKS URI before enabling desktop cloud traffic.
-5. Implement atomic authorization-code and PKCE consumption, bounded token exchange, ID-token algorithm/signature/issuer/audience/expiry/nonce validation, refresh rotation, logout and revocation.
-6. Implement signed-token verification, owner-derived cloud records, authenticated upload-session creation and the direct object-storage adapter.
-7. Capture `ThumbnailHealth` plus `LibraryHealth` evidence for the now-validated live Library refresh path.
-8. Validate the stale/recent/final-file cleanup matrix, including stale `.ffmpeg-finalizing-*` candidates.
-9. Run the 60-second mostly-static full-source and selected-area duration matrix.
-10. Validate camera, submitted A/V drift, and audio-mixer health with camera + microphone + system audio.
+2. Establish the Supabase development foundation: projects/environments, migration workflow, Supabase Auth issuer/client configuration, trusted SaaS API origin, and server-only service-role boundary.
+3. Complete atomic authorization-code and PKCE consumption, bounded token exchange, and strict ID-token algorithm/signature/issuer/audience/expiry/nonce validation.
+4. Implement the Supabase profiles, plans, provider prices, customer mappings, checkouts, subscriptions, entitlements and webhook-event schema with RLS and private/server-only write paths.
+5. Implement `GET /api/v1/me/access`, normalized `desktop_full_access`, desktop AuthGate, payment selection, payment-pending flow and native Rust entitlement enforcement.
+6. Implement the common billing-provider interface and Stripe Checkout/subscriptions first, including signature-verified idempotent webhooks and Customer Portal management.
+7. Add PayPal subscriptions and verified webhooks, then PhonePe hosted checkout/UPI AutoPay after production merchant recurring-payment capability is confirmed.
+8. Add a short-lived signed offline entitlement lease and validate expiry, clock skew, refresh and revoked/expired account behavior.
+9. Implement signed-token verification, owner-derived cloud records, authenticated upload-session creation and the direct object-storage adapter.
+10. Repeat Pause/Resume and confirm native `FinalizerHealth` success or bounded `FallbackHealth` output plus final candidate publication.
+11. Check the first Windows CI run and resolve any remaining frontend, formatting, test, dependency-lock or Windows compilation failures.
+12. Capture `ThumbnailHealth` plus `LibraryHealth` evidence for the now-validated live Library refresh path.
+13. Validate the stale/recent/final-file cleanup matrix, including stale `.ffmpeg-finalizing-*` candidates.
+14. Run the 60-second mostly-static full-source and selected-area duration matrix.
+15. Validate camera, submitted A/V drift, and audio-mixer health with camera + microphone + system audio.
 
 ---
 
@@ -269,28 +274,211 @@ The detailed policy, trust boundaries, current data inventory, and mandatory sta
 | SEC-13 | ⚪ | SaaS authentication, object authorisation, tenancy, and rate-limit tests | Bounded requests, pinned authorization metadata, native callback capture and pinned token endpoint/issuer/audience/JWKS metadata are present; token signature/claim verification, verified ownership, cross-user rejection and rate limits remain unimplemented |
 | SEC-14 | ⚪ | Optional encrypted local recording storage | Keys are protected by the OS and recovery/deletion behaviour is documented |
 | SEC-15 | ⚪ | Independent penetration test and remediation verification | High/critical findings resolved before public release |
+| SEC-16 | 🔵 | Supabase RLS and server-role isolation | Every exposed table has owner-scoped RLS; billing/entitlement writes require trusted server credentials; service-role key is absent from desktop/web bundles |
+| SEC-17 | 🔵 | Payment webhook authenticity and idempotency | Stripe, PayPal and PhonePe signatures are verified from raw requests; duplicate provider event IDs cannot repeat state transitions |
+| SEC-18 | 🔵 | Paid entitlement enforcement and offline lease | React route gate, native Rust command guard, backend checks and a bounded signed lease reject unpaid, expired, suspended and tampered states |
+| SEC-19 | 🔵 | Billing secret and payment-data boundary | Provider secrets remain server-only; hosted checkout keeps card/UPI credentials outside Recorder; logs exclude tokens, payment credentials and full webhook bodies |
 
 ## SaaS and sharing
 
-The mid-August target is a focused desktop + SaaS MVP. Authentication, secure desktop token storage, direct object-storage upload, progress/retry, cloud metadata and share permissions are prioritised; cloud transcoding, teams, billing, comments and advanced administration remain later work.
+The target is a paid desktop + SaaS product. Anyone may register, download and install
+Recorder, but registration alone does not unlock protected routes or native recording
+commands. Full access requires a backend-confirmed active `desktop_full_access`
+entitlement. Supabase is the target authentication/database foundation; Stripe, PayPal
+and PhonePe are normalized behind one billing service. The detailed architecture record
+is `docs/status/2026-08-03-saas-paid-access-architecture.md`.
 
 | ID | Status | Work |
 |---|---:|---|
-| SAAS-01 | 🟡 | Native state/nonce/PKCE, compile-time-pinned authorization and token trust metadata, Windows browser launch and bounded numeric-loopback callback capture are implemented; real provider registration, atomic code exchange and ID-token validation remain |
+| SAAS-01 | 🟡 | Native state/nonce/PKCE, compile-time-pinned authorization and token trust metadata, Windows browser launch and bounded numeric-loopback callback capture are implemented; Supabase provider registration, atomic code exchange and ID-token validation remain |
 | SAAS-02 | 🟡 | Windows Credential Manager readiness/status/clear plus a transient native-only PKCE verifier boundary and failure-isolated Settings checks are implemented; Windows validation and real refresh-token write/rotation remain |
 | SAAS-03 | 🟡 | Resumable uploads | Upload-session metadata is limited to 64 KiB, must arrive within ten seconds, uses strict UTF-8/JSON/Zod validation and still fails closed; authenticated object-storage adapter pending |
 | SAAS-04 | 🔵 | Upload progress/retry |
 | SAAS-05 | 🔵 | Shareable links |
 | SAAS-06 | 🟡 | Public/private/link-only permissions | Visibility contract exists; server-side ownership and authorization enforcement pending |
 | SAAS-07 | ⚪ | Cloud video processing/streaming |
-| SAAS-08 | 🟡 | Cloud thumbnails and metadata | Strict cloud recording metadata contract exists; database persistence and cloud library pending |
+| SAAS-08 | 🟡 | Cloud thumbnails and metadata | Strict cloud recording metadata contract exists; Supabase persistence and cloud library pending |
 | SAAS-09 | ⚪ | Comments and reactions |
 | SAAS-10 | ⚪ | Team workspaces |
 | SAAS-11 | 🔵 | Usage limits |
-| SAAS-12 | ⚪ | Subscription billing |
+| SAAS-12 | 🔵 | Multi-provider subscription billing | Stripe, PayPal and PhonePe checkout/webhook adapters normalize into one subscription and entitlement model |
 | SAAS-13 | 🔵 | Storage quotas |
 | SAAS-14 | 🔵 | Retention/deletion policy |
 | SAAS-15 | ⚪ | Administration and abuse tools |
+| SAAS-16 | 🔵 | Paid desktop AuthGate and paywall | No session → login; authenticated/unpaid → payment selection; active entitlement → full application |
+| SAAS-17 | 🔵 | Authoritative `/me/access` endpoint | Verified Supabase `sub` resolves normalized subscription and `desktop_full_access`; email is never payment proof |
+| SAAS-18 | 🔵 | Supabase PostgreSQL and RLS foundation | Environment-separated migrations, private billing writes, owner-scoped reads and backup/recovery policy |
+| SAAS-19 | 🔵 | Common billing-provider abstraction | Provider availability, checkout creation, webhook verification, event normalization, cancellation and management sessions |
+| SAAS-20 | 🔵 | Signed offline entitlement lease | Short-lived native-verifiable lease supports bounded offline recording and expires closed without revalidation |
+| SAAS-21 | 🔵 | Subscription management | Stripe portal plus equivalent PayPal/PhonePe cancellation, renewal and payment-status workflows |
+
+## Accepted paid-access architecture
+
+### User and access flow
+
+```text
+Download/install
+  → Login or register through Supabase Auth OIDC + PKCE
+  → Backend verifies token and reads /api/v1/me/access
+  → No desktop_full_access: show Stripe / PayPal / PhonePe selection
+  → Backend creates internal checkout tied to verified Supabase user UUID
+  → Provider-hosted checkout opens in system browser
+  → Verified idempotent webhook updates subscription and entitlement
+  → Desktop refreshes /api/v1/me/access
+  → React routes and native Rust commands unlock
+```
+
+A browser success redirect may trigger a status refresh but must never grant access.
+
+### Canonical identity and payment correlation
+
+The permanent account key is `auth.users.id`, derived from the verified token `sub`.
+Email is profile/contact data and is not used to decide who paid. Payment ownership is
+resolved only through:
+
+```text
+verified user UUID
+  ↔ internal billing_checkouts.id
+  ↔ provider checkout/order/subscription ID
+  ↔ verified provider webhook
+  ↔ entitlements(user_id, desktop_full_access)
+```
+
+The checkout request body must not contain a trusted user ID. The backend derives it
+from the verified access token before creating the internal checkout.
+
+### Access states
+
+| State | Access |
+|---|---|
+| No session | Login/register only |
+| Registered, unpaid | Account, provider selection, support and sign out |
+| Checkout pending | Payment-pending and bounded access-status polling |
+| Active `desktop_full_access` | Full Recorder, Library, upload and sharing |
+| Past due/grace | Explicit product-policy-dependent bounded access |
+| Cancelled at period end | Access until verified entitlement expiry |
+| Expired/suspended/disabled | Paywall and account management only |
+
+### Target desktop routes
+
+```text
+/auth
+/access-check
+/subscribe
+/payment-pending
+/
+/library
+/settings
+/billing
+```
+
+Route guards are not sufficient by themselves. Protected Tauri commands require a
+native entitlement check, and cloud operations require server authorization on every
+request.
+
+## Supabase database and identity
+
+| ID | Status | Work | Acceptance evidence |
+|---|---:|---|---|
+| DB-01 | 🔵 | Supabase project and environment setup | Separate development/staging/production projects, regions, secrets and migration targets documented and reproducible |
+| DB-02 | 🔵 | Supabase Auth identity mapping | Verified JWT `sub` maps to `auth.users.id`; email changes do not alter billing ownership |
+| DB-03 | 🔵 | Profiles table | `profiles.user_id` references `auth.users(id)` with account status and safe profile fields |
+| DB-04 | 🔵 | Plans and provider-price catalog | Stable `plan_key` maps to Stripe, PayPal and PhonePe identifiers, currencies and amounts without trusting desktop prices |
+| DB-05 | 🔵 | Provider customer mappings | Unique `(user_id, provider)` and `(provider, provider_customer_id)` relationships |
+| DB-06 | 🔵 | Internal checkout records | Checkout UUID is created before redirect and stores user, provider, plan, provider checkout ID, status and expiry |
+| DB-07 | 🔵 | Normalized subscriptions | Provider subscription/customer IDs, plan, status, period dates and cancel-at-period-end are stored transactionally |
+| DB-08 | 🔵 | Entitlements | Unique `(user_id, feature_key)` record drives `desktop_full_access`, validity and source subscription |
+| DB-09 | 🔵 | Webhook event idempotency | Unique `(provider, provider_event_id)` prevents duplicate Stripe, PayPal or PhonePe state application |
+| DB-10 | 🔵 | Billing audit and reconciliation | State changes record provider, reason, previous/new status and safe identifiers; scheduled reconciliation detects missed webhooks |
+| DB-11 | 🔵 | Row Level Security | Owner-scoped profile/product reads pass; direct client writes to billing, subscriptions and entitlements fail |
+| DB-12 | 🔵 | Service-role isolation | Supabase service-role key exists only in trusted backend secrets and is absent from Tauri, React, installers and public CI output |
+| DB-13 | ⚪ | Backup and recovery | Migration rollback, point-in-time recovery, restore drill and retention objectives documented and tested |
+| DB-14 | ⚪ | Data lifecycle and deletion | Account deletion coordinates auth user, billing metadata, entitlements, recordings, retention obligations and provider references |
+
+Minimum target relations:
+
+```text
+auth.users
+  ├── profiles.user_id
+  ├── billing_customers.user_id
+  ├── billing_checkouts.user_id
+  ├── billing_subscriptions.user_id
+  └── entitlements.user_id
+
+billing_checkouts
+  └── provider_checkout_id
+
+billing_subscriptions
+  └── provider_subscription_id
+
+billing_webhook_events
+  └── unique(provider, provider_event_id)
+```
+
+## Billing and paid entitlement
+
+| ID | Status | Work | Acceptance evidence |
+|---|---:|---|---|
+| BILL-01 | 🔵 | Paid-only product policy | Registration/download/install remain public; protected desktop functions require active `desktop_full_access` |
+| BILL-02 | 🔵 | Provider availability endpoint | Backend returns enabled providers by country, currency, plan and merchant capability |
+| BILL-03 | 🔵 | Common checkout endpoint | Authenticated `POST /api/v1/billing/checkout` accepts provider and plan only; user identity comes from verified JWT |
+| BILL-04 | 🔵 | Internal checkout correlation | Internal checkout UUID maps verified user to provider checkout/order/subscription identifiers without email matching |
+| BILL-05 | 🔵 | Stripe subscription checkout | Hosted Checkout subscription uses approved server-side Price ID and internal checkout/user references |
+| BILL-06 | 🔵 | Stripe webhook processing | Raw-body signature verification, event idempotency and transactional subscription/entitlement update pass |
+| BILL-07 | 🔵 | Stripe Customer Portal | Authenticated user receives a short-lived management session for invoices, payment method and cancellation |
+| BILL-08 | 🔵 | PayPal subscription checkout | Approved plan and internal checkout reference produce a browser approval flow tied to the verified user |
+| BILL-09 | 🔵 | PayPal webhook processing | Authenticity verification and idempotent normalized subscription transitions pass |
+| BILL-10 | 🔵 | PhonePe hosted checkout | Supported INR/customer flow creates merchant order linked to internal checkout before redirect |
+| BILL-11 | 🔵 | PhonePe recurring-payment readiness | Production merchant confirms UPI AutoPay/recurring capability; unsupported one-time-only setup cannot represent an active subscription |
+| BILL-12 | 🔵 | PhonePe webhook processing | Server-to-server authenticity and idempotent order/subscription normalization pass |
+| BILL-13 | 🔵 | Normalized subscription states | `pending`, `active`, `grace_period`, `past_due`, `suspended`, `cancelled` and `expired` map consistently across providers |
+| BILL-14 | 🔵 | `desktop_full_access` provisioning | Only verified webhook/reconciliation state can activate, extend, suspend or expire the entitlement |
+| BILL-15 | 🔵 | `/api/v1/me/access` | Verified user receives normalized provider/status/expiry/features; another user's records are never returned |
+| BILL-16 | 🔵 | Desktop login and paywall routes | Startup resolves session/access before mounting Recorder; unpaid users cannot reach protected routes |
+| BILL-17 | 🔵 | Native Rust entitlement guard | Direct invocation of recording/upload/share commands fails without a current valid entitlement lease |
+| BILL-18 | 🔵 | Payment-pending confirmation | Desktop polls access status with a bounded deadline/backoff; redirect parameters cannot unlock the app |
+| BILL-19 | 🔵 | Signed offline access lease | Lease includes internal user, features, issue/expiry and is verified natively with tamper/expiry/clock-skew tests |
+| BILL-20 | ⚪ | Cancellation and grace policy | Cancel-at-period-end, payment failure, grace duration, suspension and recovery behavior are product-defined and tested |
+| BILL-21 | ⚪ | Refund and chargeback handling | Provider disputes/refunds update access according to documented policy without destructive duplicate transitions |
+| BILL-22 | ⚪ | Subscription reconciliation jobs | Scheduled provider comparisons repair missed webhooks and alert on unresolved state divergence |
+| BILL-23 | ⚪ | Billing support tooling | Safe user/provider lookup, event timeline and manual remediation require audited administrator authorization |
+
+Required API surface:
+
+```text
+POST /api/v1/auth/exchange
+POST /api/v1/auth/refresh
+POST /api/v1/auth/logout
+
+GET  /api/v1/me
+GET  /api/v1/me/access
+
+GET  /api/v1/billing/providers
+GET  /api/v1/billing/plans
+GET  /api/v1/billing/subscription
+POST /api/v1/billing/checkout
+POST /api/v1/billing/cancel
+POST /api/v1/billing/manage
+
+POST /api/v1/webhooks/stripe
+POST /api/v1/webhooks/paypal
+POST /api/v1/webhooks/phonepe
+```
+
+## Paid-access security invariants
+
+1. Never unlock from an email match.
+2. Never trust a user ID supplied by the desktop checkout request.
+3. Derive ownership from a verified Supabase token `sub` claim.
+4. Create the internal checkout before provider redirect.
+5. Persist provider IDs against the internal checkout and user.
+6. Verify all provider webhooks and process them idempotently and transactionally.
+7. Never unlock from a success-page redirect.
+8. Only trusted backend code may write subscription and entitlement state.
+9. Require `desktop_full_access` at React, native Rust and SaaS API boundaries.
+10. Keep Supabase service-role and Stripe/PayPal/PhonePe secrets server-only.
+11. Use hosted checkout so Recorder never handles card, PayPal credential or UPI secret data.
+12. Exclude access/refresh tokens, payment credentials and full webhook payloads from default logs.
 
 ---
 
@@ -309,8 +497,11 @@ The desktop recorder is not production-ready until all of the following pass:
 - No production FFmpeg dependency.
 - Crash-safe temporary files and recovery behaviour.
 - SEC-02 through SEC-10 completed and validated.
+- Supabase migrations, RLS, service-role isolation, backup and owner-separation tests pass.
+- Stripe, PayPal and PhonePe checkout/webhook paths pass authenticity, idempotency, cancellation and cross-user negative tests for supported markets.
+- Login, paywall, `/me/access`, native entitlement guard and signed offline-lease expiry/tamper tests pass.
 - Signed installer and updater path tested on a clean Windows machine.
-- Privacy policy, data inventory, dependency/licence report, and incident-response contact completed.
+- Privacy policy, data inventory, dependency/licence report, billing terms, refund policy and incident-response contact completed.
 
 ## Target control latency
 
@@ -362,3 +553,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-08-02 | `1a4442c..8189d1c` | Added compile-time-pinned OIDC client metadata, strict HTTPS/native-redirect/scope validation, standards-compliant authorization URL construction, Settings readiness status and HLT-28; SAAS-01 and SEC-12 remain 🟡 while SEC-13 remains ⚪ |
 | 2026-08-02 | `2b08248..27ffcec` | Added native Windows browser launch, bounded numeric-loopback callback interception, strict HTTP/Host/query/state validation, native code expiry, Settings controls and HLT-29; SAAS-01 and SEC-12 remain 🟡 while SEC-13 remains ⚪ |
 | 2026-08-02 | `684742d..9efbba6` | Added an all-or-none compile-time token endpoint, issuer, audience and JWKS trust contract, combined readiness and a backend browser-flow gate; SAAS-01, SEC-12 and HLT-30 remain 🟡 while SEC-13 remains ⚪ |
+| 2026-08-03 | `f8109fb` | Documented the Supabase identity/database foundation, Stripe/PayPal/PhonePe adapters, internal checkout-to-user correlation, verified-webhook entitlement model, paid AuthGate, native access enforcement and offline lease; DB-01–14, BILL-01–23, SAAS-12/16–21 and SEC-16–19 added for tracking |
