@@ -145,8 +145,12 @@ fn parse_loopback_endpoint(raw: &str) -> Result<LoopbackEndpoint, String> {
         .ok_or_else(|| "OIDC loopback callback requires a fixed port".to_string())?;
     let address = url
         .host_str()
-        .and_then(|host| host.trim_matches(['[', ']']).parse::<IpAddr>().ok())
-        .filter(IpAddr::is_loopback)
+        .and_then(|host| {
+            host.trim_matches(|character| character == '[' || character == ']')
+                .parse::<IpAddr>()
+                .ok()
+        })
+        .filter(|address| address.is_loopback())
         .ok_or_else(|| "OIDC callback host must be an IP loopback address".to_string())?;
 
     Ok(LoopbackEndpoint {
