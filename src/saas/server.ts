@@ -81,10 +81,20 @@ function envValue(env: unknown, key: string): string | undefined {
   return recordValue(serverEnvironment, key);
 }
 
-function isHttpsUrl(value: string | undefined): boolean {
+function isTrustedServerUrl(value: string | undefined): boolean {
   if (!value) return false;
   try {
-    return new URL(value).protocol === "https:";
+    const url = new URL(value);
+    if (!url.hostname || url.username || url.password || url.search || url.hash) {
+      return false;
+    }
+    if (url.protocol === "https:") return true;
+    return (
+      url.protocol === "http:" &&
+      (url.hostname === "127.0.0.1" ||
+        url.hostname === "[::1]" ||
+        url.hostname === "::1")
+    );
   } catch {
     return false;
   }
@@ -104,10 +114,10 @@ function configuredUploadLimit(env: unknown): number {
 
 function capabilities(env: unknown) {
   const authenticationConfigured =
-    isHttpsUrl(envValue(env, "RECORDER_AUTH_ISSUER")) &&
+    isTrustedServerUrl(envValue(env, "RECORDER_AUTH_ISSUER")) &&
     Boolean(envValue(env, "RECORDER_AUTH_AUDIENCE"));
   const uploadsConfigured =
-    isHttpsUrl(envValue(env, "RECORDER_UPLOAD_ORIGIN")) &&
+    isTrustedServerUrl(envValue(env, "RECORDER_UPLOAD_ORIGIN")) &&
     Boolean(envValue(env, "RECORDER_UPLOAD_BUCKET"));
   const database = supabaseReadiness(env);
 
