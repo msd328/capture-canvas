@@ -22,11 +22,11 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Pull the pinned OIDC token-contract batch, run `scripts/windows-local-check.ps1`, and validate the unconfigured **Settings → Cloud account** state plus **Check provider configuration**, **Check secure storage**, and **Check sign-in security**.
-2. Establish the Supabase development foundation: projects/environments, migration workflow, Supabase Auth issuer/client configuration, trusted SaaS API origin, and server-only service-role boundary.
-3. Complete atomic authorization-code and PKCE consumption, bounded token exchange, and strict ID-token algorithm/signature/issuer/audience/expiry/nonce validation.
-4. Implement the Supabase profiles, plans, provider prices, customer mappings, checkouts, subscriptions, entitlements and webhook-event schema with RLS and private/server-only write paths.
-5. Implement `GET /api/v1/me/access`, normalized `desktop_full_access`, desktop AuthGate, payment selection, payment-pending flow and native Rust entitlement enforcement.
+1. Pull the Supabase foundation batch, run `scripts/windows-local-check.ps1` and `scripts/supabase-local-check.ps1`, and resolve any frontend, Rust, migration, RLS, grant or pgTAP failures.
+2. Create and document separate Supabase development, staging and production projects; link only the intended environment and validate the committed migration against development before any remote staging/production push.
+3. Complete atomic authorization-code and PKCE consumption, bounded token exchange, and strict Supabase ID-token algorithm/signature/issuer/audience/expiry/nonce validation.
+4. Implement authenticated server access to the private schema and `GET /api/v1/me/access`, deriving ownership only from the verified Supabase `sub` UUID.
+5. Implement normalized `desktop_full_access`, desktop AuthGate, payment selection, payment-pending flow and native Rust entitlement enforcement.
 6. Implement the common billing-provider interface and Stripe Checkout/subscriptions first, including signature-verified idempotent webhooks and Customer Portal management.
 7. Add PayPal subscriptions and verified webhooks, then PhonePe hosted checkout/UPI AutoPay after production merchant recurring-payment capability is confirmed.
 8. Add a short-lived signed offline entitlement lease and validate expiry, clock skew, refresh and revoked/expired account behavior.
@@ -159,7 +159,7 @@ Every implementation update must also include the security-impact block defined 
 | HLT-20 | 🟡 | Native thumbnail failure-stage and retry diagnostics | `ThumbnailHealth` implemented for WinRT open/request/read stages and asynchronous backfill; Windows single-segment and fallback-output reruns pending |
 | HLT-21 | 🟡 | Native render timeout, cancellation and isolated-candidate outcome | Windows compiler accepted render timeout/cancellation fields and Recorder started; forced-timeout, cancellation-settle and publication runtime evidence remain pending |
 | HLT-22 | 🟡 | Startup orphan-cleanup summary and safety counters | `CleanupHealth` recognises part/mixed/system/native-finalizer and FFmpeg-finalizer candidates; stale/recent/final-file Windows matrix remains pending |
-| HLT-23 | 🟡 | Native file-open and clip-decode timeout/cancellation outcome | Windows compiler accepted bounded open/decode waits and diagnostics; forced timeout/cancellation runtime evidence remains pending |
+| HLT-23 | 🟡 | Native file-open and clip-decode timeout/cancellation outcome | Windows compiler accepted bounded open/decode waits and diagnostics; forced timeout/cancellation runtime evidence remain pending |
 | HLT-24 | 🟡 | FFmpeg fallback timeout, termination, candidate and publication health | `FallbackHealth` reports segment validation, spawn, in-memory manifest submission, process exit/timeout, kill/reap, candidate validation, publish retries and cleanup deferral; Windows fallback runtime pending |
 | HLT-25 | 🟡 | Library revision and persisted-update notification health | Live Library refresh was confirmed working on Windows; exact path-free `LibraryHealth` log evidence remains pending |
 | HLT-26 | 🟡 | Native secure-auth storage status and readiness health | `AuthHealth` emits only stage, support, status, result and numeric error code fields; Windows compile/probe evidence pending |
@@ -274,7 +274,7 @@ The detailed policy, trust boundaries, current data inventory, and mandatory sta
 | SEC-13 | ⚪ | SaaS authentication, object authorisation, tenancy, and rate-limit tests | Bounded requests, pinned authorization metadata, native callback capture and pinned token endpoint/issuer/audience/JWKS metadata are present; token signature/claim verification, verified ownership, cross-user rejection and rate limits remain unimplemented |
 | SEC-14 | ⚪ | Optional encrypted local recording storage | Keys are protected by the OS and recovery/deletion behaviour is documented |
 | SEC-15 | ⚪ | Independent penetration test and remediation verification | High/critical findings resolved before public release |
-| SEC-16 | 🔵 | Supabase RLS and server-role isolation | Every exposed table has owner-scoped RLS; billing/entitlement writes require trusted server credentials; service-role key is absent from desktop/web bundles |
+| SEC-16 | 🟡 | Supabase RLS and server-role isolation | Public profile/plan policies, private billing schema, explicit grants/revocations, secret-safe readiness and pgTAP tests are implemented; local execution and remote environment validation pending |
 | SEC-17 | 🔵 | Payment webhook authenticity and idempotency | Stripe, PayPal and PhonePe signatures are verified from raw requests; duplicate provider event IDs cannot repeat state transitions |
 | SEC-18 | 🔵 | Paid entitlement enforcement and offline lease | React route gate, native Rust command guard, backend checks and a bounded signed lease reject unpaid, expired, suspended and tampered states |
 | SEC-19 | 🔵 | Billing secret and payment-data boundary | Provider secrets remain server-only; hosted checkout keeps card/UPI credentials outside Recorder; logs exclude tokens, payment credentials and full webhook bodies |
@@ -307,7 +307,7 @@ is `docs/status/2026-08-03-saas-paid-access-architecture.md`.
 | SAAS-15 | ⚪ | Administration and abuse tools |
 | SAAS-16 | 🔵 | Paid desktop AuthGate and paywall | No session → login; authenticated/unpaid → payment selection; active entitlement → full application |
 | SAAS-17 | 🔵 | Authoritative `/me/access` endpoint | Verified Supabase `sub` resolves normalized subscription and `desktop_full_access`; email is never payment proof |
-| SAAS-18 | 🔵 | Supabase PostgreSQL and RLS foundation | Environment-separated migrations, private billing writes, owner-scoped reads and backup/recovery policy |
+| SAAS-18 | 🟡 | Supabase PostgreSQL and RLS foundation | Local CLI configuration, versioned paid-access migrations, private billing writes, owner-scoped profile reads, secret-safe readiness and pgTAP tests are implemented; execution and remote environment validation pending |
 | SAAS-19 | 🔵 | Common billing-provider abstraction | Provider availability, checkout creation, webhook verification, event normalization, cancellation and management sessions |
 | SAAS-20 | 🔵 | Signed offline entitlement lease | Short-lived native-verifiable lease supports bounded offline recording and expires closed without revalidation |
 | SAAS-21 | 🔵 | Subscription management | Stripe portal plus equivalent PayPal/PhonePe cancellation, renewal and payment-status workflows |
@@ -380,18 +380,18 @@ request.
 
 | ID | Status | Work | Acceptance evidence |
 |---|---:|---|---|
-| DB-01 | 🔵 | Supabase project and environment setup | Separate development/staging/production projects, regions, secrets and migration targets documented and reproducible |
-| DB-02 | 🔵 | Supabase Auth identity mapping | Verified JWT `sub` maps to `auth.users.id`; email changes do not alter billing ownership |
-| DB-03 | 🔵 | Profiles table | `profiles.user_id` references `auth.users(id)` with account status and safe profile fields |
-| DB-04 | 🔵 | Plans and provider-price catalog | Stable `plan_key` maps to Stripe, PayPal and PhonePe identifiers, currencies and amounts without trusting desktop prices |
-| DB-05 | 🔵 | Provider customer mappings | Unique `(user_id, provider)` and `(provider, provider_customer_id)` relationships |
-| DB-06 | 🔵 | Internal checkout records | Checkout UUID is created before redirect and stores user, provider, plan, provider checkout ID, status and expiry |
-| DB-07 | 🔵 | Normalized subscriptions | Provider subscription/customer IDs, plan, status, period dates and cancel-at-period-end are stored transactionally |
-| DB-08 | 🔵 | Entitlements | Unique `(user_id, feature_key)` record drives `desktop_full_access`, validity and source subscription |
-| DB-09 | 🔵 | Webhook event idempotency | Unique `(provider, provider_event_id)` prevents duplicate Stripe, PayPal or PhonePe state application |
-| DB-10 | 🔵 | Billing audit and reconciliation | State changes record provider, reason, previous/new status and safe identifiers; scheduled reconciliation detects missed webhooks |
-| DB-11 | 🔵 | Row Level Security | Owner-scoped profile/product reads pass; direct client writes to billing, subscriptions and entitlements fail |
-| DB-12 | 🔵 | Service-role isolation | Supabase service-role key exists only in trusted backend secrets and is absent from Tauri, React, installers and public CI output |
+| DB-01 | 🟡 | Supabase project and environment setup | Local CLI configuration, migration/test workflow and secret-ignore rules are committed; separate remote development/staging/production projects and links remain pending |
+| DB-02 | 🟡 | Supabase Auth identity mapping | `auth.users.id` foreign keys and profile synchronization are implemented; real JWT verification and email-change runtime validation remain |
+| DB-03 | 🟡 | Profiles table | Own-row SELECT, display-name-only UPDATE, account-status protection and auth-user synchronization are implemented; pgTAP/runtime validation pending |
+| DB-04 | 🟡 | Plans and provider-price catalog | Public plan and private provider-price schemas, provider/currency constraints and uniqueness are implemented; approved production products/prices remain unseeded |
+| DB-05 | 🟡 | Provider customer mappings | Unique user/provider and provider/customer relationships are implemented; provider adapter integration pending |
+| DB-06 | 🟡 | Internal checkout records | Server-owned checkout UUID, user/plan/provider/status/amount/expiry fields and provider-ID uniqueness are implemented; checkout API pending |
+| DB-07 | 🟡 | Normalized subscriptions | Provider subscription IDs, normalized statuses, periods and cancellation fields are implemented; webhook transitions pending |
+| DB-08 | 🟡 | Entitlements | Unique user/feature rows, source subscription/provider and validity bounds are implemented; `desktop_full_access` provisioning pending |
+| DB-09 | 🟡 | Webhook event idempotency | Unique provider/event IDs, payload hash and processing-state schema are implemented; signed webhook handlers pending |
+| DB-10 | 🟡 | Billing audit and reconciliation | Safe billing audit schema and indexes are implemented; transactional writers and scheduled reconciliation remain pending |
+| DB-11 | 🟡 | Row Level Security | RLS, own-profile policies, active-plan policy and no-policy private tables are implemented; local pgTAP and cross-user negative execution pending |
+| DB-12 | 🟡 | Service-role isolation | Private-schema grants/revocations, server-only environment contract and `.env`/Supabase state ignores are implemented; bundle/remote secret-isolation validation pending |
 | DB-13 | ⚪ | Backup and recovery | Migration rollback, point-in-time recovery, restore drill and retention objectives documented and tested |
 | DB-14 | ⚪ | Data lifecycle and deletion | Account deletion coordinates auth user, billing metadata, entitlements, recordings, retention obligations and provider references |
 
@@ -554,3 +554,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-08-02 | `2b08248..27ffcec` | Added native Windows browser launch, bounded numeric-loopback callback interception, strict HTTP/Host/query/state validation, native code expiry, Settings controls and HLT-29; SAAS-01 and SEC-12 remain 🟡 while SEC-13 remains ⚪ |
 | 2026-08-02 | `684742d..9efbba6` | Added an all-or-none compile-time token endpoint, issuer, audience and JWKS trust contract, combined readiness and a backend browser-flow gate; SAAS-01, SEC-12 and HLT-30 remain 🟡 while SEC-13 remains ⚪ |
 | 2026-08-03 | `f8109fb` | Documented the Supabase identity/database foundation, Stripe/PayPal/PhonePe adapters, internal checkout-to-user correlation, verified-webhook entitlement model, paid AuthGate, native access enforcement and offline lease; DB-01–14, BILL-01–23, SAAS-12/16–21 and SEC-16–19 added for tracking |
+| 2026-08-03 | `0109d17..d1c67dd` | Added local Supabase configuration, paid-access migrations, private-schema/RLS/grant isolation, profile synchronization, billing/entitlement/webhook schemas, secret-safe readiness, environment hygiene and pgTAP validation; SAAS-18, SEC-16 and DB-01–12 → 🟡 pending execution |
