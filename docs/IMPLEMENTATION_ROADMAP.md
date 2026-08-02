@@ -22,11 +22,11 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Pull the native OIDC loopback batch, run `scripts/windows-local-check.ps1`, and validate the unconfigured **Settings → Cloud account** state plus **Check provider configuration**, **Check secure storage**, and **Check sign-in security**.
+1. Pull the pinned OIDC token-contract batch, run `scripts/windows-local-check.ps1`, and validate the unconfigured **Settings → Cloud account** state plus **Check provider configuration**, **Check secure storage**, and **Check sign-in security**.
 2. Repeat Pause/Resume and confirm native `FinalizerHealth` success or bounded `FallbackHealth` output plus final candidate publication.
 3. Check the first Windows CI run and resolve any remaining frontend, formatting, test, dependency-lock or Windows compilation failures.
-4. Select the real SaaS API origin and OIDC provider, register the exact numeric-loopback redirect URI, and add only the chosen HTTPS API origin to CSP before enabling desktop cloud traffic.
-5. Implement atomic authorization-code exchange, ID-token signature/issuer/audience/expiry/nonce validation, refresh rotation, logout and revocation.
+4. Select the real SaaS API origin and OIDC provider; register the exact numeric-loopback redirect URI and pin the exact token endpoint, issuer, API audience and JWKS URI before enabling desktop cloud traffic.
+5. Implement atomic authorization-code and PKCE consumption, bounded token exchange, ID-token algorithm/signature/issuer/audience/expiry/nonce validation, refresh rotation, logout and revocation.
 6. Implement signed-token verification, owner-derived cloud records, authenticated upload-session creation and the direct object-storage adapter.
 7. Capture `ThumbnailHealth` plus `LibraryHealth` evidence for the now-validated live Library refresh path.
 8. Validate the stale/recent/final-file cleanup matrix, including stale `.ffmpeg-finalizing-*` candidates.
@@ -161,6 +161,7 @@ Every implementation update must also include the security-impact block defined 
 | HLT-27 | 🟡 | Native OIDC transaction lifecycle health | Secret-free prepare/status/cancel/probe diagnostics report expiry, S256 readiness, state round-trip, nonce retention, replay rejection and native verifier handling; Windows runtime evidence pending |
 | HLT-28 | 🟡 | Pinned OIDC client configuration and authorization preparation health | `AuthHealth` reports configured/unconfigured state, fixed callback mode, scope count, URL size and native-verifier handling without endpoint, client ID, state, nonce, challenge or URL values; Windows validation pending |
 | HLT-29 | 🟡 | Native OIDC browser, loopback listener, callback validation and code-expiry health | Path/token-free stages report bind, listen, browser launch, callback result, state rejection, invalid-attempt limit, timeout, cancellation and native code clearing; Windows configured-build validation pending |
+| HLT-30 | 🟡 | Pinned OIDC token endpoint, issuer, audience and JWKS readiness health | `AuthHealth` reports only configured booleans and typed failure codes; endpoint/audience values remain native and Windows compile/configured-build validation is pending |
 
 ## Recording library
 
@@ -264,8 +265,8 @@ The detailed policy, trust boundaries, current data inventory, and mandatory sta
 | SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot, Windows CI, stable line-ending policy and a successful complete Windows local validation cycle are present; first green hosted dependency/CI cycle remains pending |
 | SEC-10 | 🔵 | Secret scanning and repository protection | Secret scanning enabled; test secret is blocked or detected without entering history |
 | SEC-11 | ⚪ | Signed executable, installer, updater, and update metadata | Signature verification passes on a clean machine |
-| SEC-12 | 🟡 | OS secure storage for future account tokens | Windows Credential Manager status/probe/clear is present; the PKCE verifier and temporary authorization code stay native-only with bounded lifetime and best-effort clearing; Windows runtime, real token rotation and macOS Keychain support remain |
-| SEC-13 | ⚪ | SaaS authentication, object authorisation, tenancy, and rate-limit tests | Bounded requests plus pinned OIDC authorization, native browser launch, strict loopback callback/state validation and one-time code capture are present; token verification, ownership, cross-user rejection and rate limits remain unimplemented |
+| SEC-12 | 🟡 | OS secure storage for future account tokens | Windows Credential Manager status/probe/clear is present; the PKCE verifier and temporary authorization code stay native-only, and real sign-in is gated on a complete pinned token trust contract; Windows runtime, refresh-token write/rotation and macOS Keychain support remain |
+| SEC-13 | ⚪ | SaaS authentication, object authorisation, tenancy, and rate-limit tests | Bounded requests, pinned authorization metadata, native callback capture and pinned token endpoint/issuer/audience/JWKS metadata are present; token signature/claim verification, verified ownership, cross-user rejection and rate limits remain unimplemented |
 | SEC-14 | ⚪ | Optional encrypted local recording storage | Keys are protected by the OS and recovery/deletion behaviour is documented |
 | SEC-15 | ⚪ | Independent penetration test and remediation verification | High/critical findings resolved before public release |
 
@@ -275,7 +276,7 @@ The mid-August target is a focused desktop + SaaS MVP. Authentication, secure de
 
 | ID | Status | Work |
 |---|---:|---|
-| SAAS-01 | 🟡 | Native state/nonce/PKCE, compile-time-pinned provider metadata, Windows browser launch and bounded numeric-loopback callback capture are implemented; real provider registration, authorization-code exchange and ID-token validation remain |
+| SAAS-01 | 🟡 | Native state/nonce/PKCE, compile-time-pinned authorization and token trust metadata, Windows browser launch and bounded numeric-loopback callback capture are implemented; real provider registration, atomic code exchange and ID-token validation remain |
 | SAAS-02 | 🟡 | Windows Credential Manager readiness/status/clear plus a transient native-only PKCE verifier boundary and failure-isolated Settings checks are implemented; Windows validation and real refresh-token write/rotation remain |
 | SAAS-03 | 🟡 | Resumable uploads | Upload-session metadata is limited to 64 KiB, must arrive within ten seconds, uses strict UTF-8/JSON/Zod validation and still fails closed; authenticated object-storage adapter pending |
 | SAAS-04 | 🔵 | Upload progress/retry |
@@ -360,3 +361,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-08-01 | `c0539a8..384d8b0` | Added native ten-minute OIDC state/nonce/S256 transaction state, native-only verifier handling, expiry/replay tests, secret-free readiness diagnostics and Settings validation; SAAS-01/02, SEC-12 and HLT-27 → 🟡 while SEC-13 remains ⚪ |
 | 2026-08-02 | `1a4442c..8189d1c` | Added compile-time-pinned OIDC client metadata, strict HTTPS/native-redirect/scope validation, standards-compliant authorization URL construction, Settings readiness status and HLT-28; SAAS-01 and SEC-12 remain 🟡 while SEC-13 remains ⚪ |
 | 2026-08-02 | `2b08248..27ffcec` | Added native Windows browser launch, bounded numeric-loopback callback interception, strict HTTP/Host/query/state validation, native code expiry, Settings controls and HLT-29; SAAS-01 and SEC-12 remain 🟡 while SEC-13 remains ⚪ |
+| 2026-08-02 | `684742d..9efbba6` | Added an all-or-none compile-time token endpoint, issuer, audience and JWKS trust contract, combined readiness and a backend browser-flow gate; SAAS-01, SEC-12 and HLT-30 remain 🟡 while SEC-13 remains ⚪ |
