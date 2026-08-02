@@ -12,6 +12,8 @@ import type {
 } from "@/types/recorder";
 import type {
   OidcAuthorizationPreparation,
+  OidcAuthorizationRequest,
+  OidcClientStatus,
   OidcTransactionProbe,
   OidcTransactionStatus,
   SecureAuthProbe,
@@ -72,6 +74,15 @@ export const probeSecureAuthStore = () =>
   }));
 export const clearSecureAuthSession = () =>
   call<void>("clear_secure_auth_session", undefined, async () => undefined);
+export const getOidcClientStatus = () =>
+  call<OidcClientStatus>("get_oidc_client_status", undefined, async () => ({
+    configured: false,
+    authorizationEndpointHttps: false,
+    callbackMode: null,
+    scopeCount: 0,
+  }));
+export const prepareOidcAuthorization = () =>
+  call<OidcAuthorizationRequest>("prepare_oidc_authorization");
 export const prepareOidcTransaction = () =>
   call<OidcAuthorizationPreparation>("prepare_oidc_transaction");
 export const getOidcTransactionStatus = () =>
