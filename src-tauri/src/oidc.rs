@@ -8,7 +8,7 @@
 use crate::auth::{OidcAuthorizationPreparation, SecureAuthStore};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use url::Url;
+use url::{Host, Url};
 
 const DEFAULT_SCOPES: &str = "openid profile email offline_access";
 const MAX_AUTHORIZATION_URL_BYTES: usize = 8 * 1024;
@@ -148,6 +148,7 @@ impl OidcClientConfig {
         {
             let mut query = authorization_url.query_pairs_mut();
             query.append_pair("response_type", "code");
+            query.append_pair("response_mode", "query");
             query.append_pair("client_id", &self.client_id);
             query.append_pair("redirect_uri", self.redirect_uri.as_str());
             query.append_pair("scope", &self.scopes.join(" "));
@@ -157,7 +158,7 @@ impl OidcClientConfig {
             query.append_pair("code_challenge_method", preparation.code_challenge_method);
         }
 
-        let value = authorization_url.into_string();
+        let value = authorization_url.to_string();
         if value.len() > MAX_AUTHORIZATION_URL_BYTES {
             return Err(OidcConfigError::new("authorization_url_too_large"));
         }
@@ -286,8 +287,12 @@ fn validate_redirect_uri(url: &Url) -> Result<CallbackMode, OidcConfigError> {
     }
 
     if url.scheme() == "http" && url.path() == "/oidc/callback" && url.port().is_some() {
-        let host = url.host_str().unwrap_or_default();
-        if host == "127.0.0.1" || host.trim_matches(['[', ']']) == "::1" {
+        let loopback = match url.host() {
+            Some(Host::Ipv4(address)) => address.is_loopback(),
+            Some(Host::Ipv6(address)) => address.is_loopback(),
+            _ => false,
+        };
+        if loopback {
             return Ok(CallbackMode::Loopback);
         }
     }
@@ -447,6 +452,7 @@ mod tests {
             parsed.query_pairs().into_owned().collect();
 
         assert_eq!(parameters.get("response_type").map(String::as_str), Some("code"));
+        assert_eq!(parameters.get("response_mode").map(String::as_str), Some("query"));
         assert_eq!(
             parameters.get("client_id").map(String::as_str),
             Some("recorder desktop client")
