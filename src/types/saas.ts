@@ -10,6 +10,19 @@ export interface SecureAuthProbe {
   storage: "windows-credential-manager" | "unsupported";
 }
 
+export interface OidcClientStatus {
+  configured: boolean;
+  authorizationEndpointHttps: boolean;
+  callbackMode: "custom-scheme" | "loopback" | null;
+  scopeCount: number;
+}
+
+export interface OidcAuthorizationRequest {
+  authorizationUrl: string;
+  expiresAt: string;
+  callbackMode: "custom-scheme" | "loopback";
+}
+
 export interface OidcAuthorizationPreparation {
   state: string;
   nonce: string;
