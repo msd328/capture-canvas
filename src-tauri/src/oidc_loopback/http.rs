@@ -188,7 +188,9 @@ fn parse_callback_request(
             }
         } else if name.eq_ignore_ascii_case("content-length") {
             if content_length.is_some() {
-                return Err("Callback request contained multiple Content-Length headers".to_string());
+                return Err(
+                    "Callback request contained multiple Content-Length headers".to_string(),
+                );
             }
             content_length = Some(
                 value
@@ -222,9 +224,21 @@ fn parse_callback_request(
 fn validate_host_header(raw: &str, endpoint: &LoopbackEndpoint) -> Result<(), String> {
     let parsed = Url::parse(&format!("http://{raw}/"))
         .map_err(|_| "Callback Host header was invalid".to_string())?;
+    if !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err("Callback Host header contained invalid components".to_string());
+    }
     let address = parsed
         .host_str()
-        .and_then(|host| host.parse::<IpAddr>().ok())
+        .and_then(|host| {
+            host.trim_matches(|character| character == '[' || character == ']')
+                .parse::<IpAddr>()
+                .ok()
+        })
         .ok_or_else(|| "Callback Host header was not an IP address".to_string())?;
     if address != endpoint.address.ip() || parsed.port() != Some(endpoint.address.port()) {
         return Err("Callback Host header did not match the configured listener".to_string());
@@ -362,5 +376,18 @@ mod tests {
 
         let wrong_host = b"GET /oidc/callback?code=abc&state=one HTTP/1.1\r\nHost: 127.0.0.1:43830\r\n\r\n";
         assert!(parse_callback_request(wrong_host, &endpoint()).is_err());
+    }
+
+    #[test]
+    fn host_header_rejects_userinfo_and_accepts_ipv6_loopback() {
+        assert!(validate_host_header("user@127.0.0.1:43829", &endpoint()).is_err());
+
+        let ipv6_endpoint = LoopbackEndpoint {
+            address: "[::1]:43829"
+                .parse::<SocketAddr>()
+                .expect("IPv6 test address should parse"),
+            path: "/oidc/callback".to_string(),
+        };
+        assert!(validate_host_header("[::1]:43829", &ipv6_endpoint).is_ok());
     }
 }
