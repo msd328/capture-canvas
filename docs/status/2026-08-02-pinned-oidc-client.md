@@ -15,7 +15,8 @@ persistence.
   - `RECORDER_OIDC_REDIRECT_URI`
   - `RECORDER_OIDC_SCOPES`
 - Added Cargo rebuild tracking for every OIDC build input.
-- Added a direct `url` dependency for standards-compliant URL parsing and encoding.
+- Reused Tauri's public `Url` parser for standards-compliant parsing and encoding;
+  no new dependency or Cargo lockfile change is required.
 - Added fail-closed client configuration status.
 - Required an HTTPS authorization endpoint without userinfo, query, or fragment.
 - Allowed only these native redirect forms:
