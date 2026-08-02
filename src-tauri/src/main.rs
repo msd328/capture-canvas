@@ -45,7 +45,6 @@ fn main() {
             commands::auth::probe_secure_auth_store,
             commands::auth::clear_secure_auth_session,
             commands::auth::get_oidc_client_status,
-            commands::auth::prepare_oidc_authorization,
             commands::auth::start_oidc_sign_in,
             commands::auth::get_oidc_callback_status,
             commands::auth::prepare_oidc_transaction,
