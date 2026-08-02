@@ -15,6 +15,11 @@ export interface OidcClientStatus {
   authorizationEndpointHttps: boolean;
   callbackMode: "custom-scheme" | "loopback" | null;
   scopeCount: number;
+  tokenExchangeConfigured: boolean;
+  tokenEndpointHttps: boolean;
+  issuerHttps: boolean;
+  audienceConfigured: boolean;
+  jwksUriHttps: boolean;
 }
 
 export interface OidcSignInLaunch {
