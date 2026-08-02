@@ -17,12 +17,6 @@ export interface OidcClientStatus {
   scopeCount: number;
 }
 
-export interface OidcAuthorizationRequest {
-  authorizationUrl: string;
-  expiresAt: string;
-  callbackMode: "custom-scheme" | "loopback";
-}
-
 export interface OidcSignInLaunch {
   launched: boolean;
   callbackMode: "loopback";
