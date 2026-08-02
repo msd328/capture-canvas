@@ -3,7 +3,11 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import * as desktop from "@/services/desktop";
 import type { CameraInfo, MicrophoneInfo, RecorderSettings } from "@/types/recorder";
-import type { OidcClientStatus, SecureAuthStatus } from "@/types/saas";
+import type {
+  OidcCallbackStatus,
+  OidcClientStatus,
+  SecureAuthStatus,
+} from "@/types/saas";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -40,10 +44,13 @@ function SettingsPage() {
   const [authStatusError, setAuthStatusError] = useState(false);
   const [oidcClientStatus, setOidcClientStatus] = useState<OidcClientStatus | null>(null);
   const [oidcClientError, setOidcClientError] = useState(false);
+  const [oidcCallbackStatus, setOidcCallbackStatus] = useState<OidcCallbackStatus | null>(null);
   const [saving, setSaving] = useState(false);
   const [checkingSecureStore, setCheckingSecureStore] = useState(false);
   const [checkingSignInSecurity, setCheckingSignInSecurity] = useState(false);
   const [checkingProviderConfiguration, setCheckingProviderConfiguration] = useState(false);
+  const [startingCloudSignIn, setStartingCloudSignIn] = useState(false);
+  const [cancellingCloudSignIn, setCancellingCloudSignIn] = useState(false);
   const [clearingSession, setClearingSession] = useState(false);
 
   useEffect(() => {
@@ -84,10 +91,32 @@ function SettingsPage() {
       },
     );
 
+    void desktop.getOidcCallbackStatus().then((status) => {
+      if (!cancelled) setOidcCallbackStatus(status);
+    });
+
     return () => {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!oidcCallbackStatus?.pending) return;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      void desktop.getOidcCallbackStatus().then(
+        (status) => {
+          if (!cancelled) setOidcCallbackStatus(status);
+        },
+        () => undefined,
+      );
+    }, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [oidcCallbackStatus?.pending]);
 
   if (!settings) {
     return (
@@ -175,11 +204,38 @@ function SettingsPage() {
     }
   };
 
+  const startCloudSignIn = async () => {
+    setStartingCloudSignIn(true);
+    try {
+      await desktop.startOidcSignIn();
+      setOidcCallbackStatus(await desktop.getOidcCallbackStatus());
+      toast.info("Your browser was opened. Complete sign-in there, then return to Recorder.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to start provider sign-in");
+    } finally {
+      setStartingCloudSignIn(false);
+    }
+  };
+
+  const cancelCloudSignIn = async () => {
+    setCancellingCloudSignIn(true);
+    try {
+      await desktop.cancelOidcTransaction();
+      setOidcCallbackStatus(await desktop.getOidcCallbackStatus());
+      toast.info("Provider sign-in cancelled");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Unable to cancel provider sign-in");
+    } finally {
+      setCancellingCloudSignIn(false);
+    }
+  };
+
   const clearCloudSession = async () => {
     setClearingSession(true);
     try {
       await desktop.clearSecureAuthSession();
       setAuthStatus(await desktop.getSecureAuthStatus());
+      setOidcCallbackStatus(await desktop.getOidcCallbackStatus());
       setAuthStatusError(false);
       toast.success("Local cloud session cleared");
     } catch (error) {
@@ -214,6 +270,13 @@ function SettingsPage() {
     : oidcClientStatus?.configured
       ? `HTTPS authorization endpoint, ${oidcClientStatus.callbackMode} callback, and ${oidcClientStatus.scopeCount} scopes are fixed at build time.`
       : "This build cannot prepare a cloud sign-in request.";
+  const callbackStatusText = describeCallbackStatus(oidcCallbackStatus);
+  const canStartCloudSignIn =
+    oidcClientStatus?.configured === true &&
+    oidcClientStatus.callbackMode === "loopback" &&
+    authStatus?.supported === true &&
+    authStatus.signedIn === false &&
+    !oidcCallbackStatus?.pending;
 
   return (
     <AppShell>
@@ -321,11 +384,17 @@ function SettingsPage() {
               <div className="font-medium text-foreground">{oidcStatusTitle}</div>
               <div className="mt-1 text-muted-foreground">{oidcStatusDescription}</div>
             </div>
+            {callbackStatusText ? (
+              <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs">
+                <div className="font-medium text-foreground">{callbackStatusText.title}</div>
+                <div className="mt-1 text-muted-foreground">{callbackStatusText.description}</div>
+              </div>
+            ) : null}
             <p className="text-xs text-muted-foreground">
-              Provider metadata is accepted only from compile-time settings. Runtime environment
-              variables, JSON settings, and WebView storage cannot redirect sign-in. Browser launch,
-              callback interception, and token exchange remain disabled until the selected provider
-              is integrated and validated.
+              Provider metadata is accepted only from compile-time settings. A configured numeric
+              loopback callback can open the system browser and receive one bounded response.
+              Authorization-code exchange and account creation remain disabled until signed-token
+              validation is implemented.
             </p>
             <div className="flex flex-wrap justify-end gap-2">
               {authStatus?.signedIn ? (
@@ -337,6 +406,26 @@ function SettingsPage() {
                   onClick={clearCloudSession}
                 >
                   {clearingSession ? "Clearing…" : "Clear local session"}
+                </Button>
+              ) : null}
+              {oidcCallbackStatus?.pending ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={cancellingCloudSignIn}
+                  onClick={cancelCloudSignIn}
+                >
+                  {cancellingCloudSignIn ? "Cancelling…" : "Cancel provider sign-in"}
+                </Button>
+              ) : oidcClientStatus?.configured ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!canStartCloudSignIn || startingCloudSignIn}
+                  onClick={startCloudSignIn}
+                >
+                  {startingCloudSignIn ? "Opening…" : "Open provider sign-in"}
                 </Button>
               ) : null}
               <Button
@@ -378,6 +467,46 @@ function SettingsPage() {
       </div>
     </AppShell>
   );
+}
+
+function describeCallbackStatus(
+  status: OidcCallbackStatus | null,
+): { title: string; description: string } | null {
+  switch (status?.stage) {
+    case "waiting":
+      return {
+        title: "Waiting for provider response",
+        description: "Complete sign-in in the browser. This listener expires after ten minutes.",
+      };
+    case "codeReceived":
+      return {
+        title: "Authorization response captured",
+        description:
+          "The one-time code is held only in native memory. Token exchange is not enabled yet.",
+      };
+    case "providerError":
+      return {
+        title: "Provider sign-in was not completed",
+        description: "The provider returned an error or the browser flow was cancelled.",
+      };
+    case "timedOut":
+      return {
+        title: "Provider response expired",
+        description: "Start sign-in again to create a new one-time state and callback listener.",
+      };
+    case "cancelled":
+      return {
+        title: "Provider sign-in cancelled",
+        description: "The local callback listener and pending authorization state were cleared.",
+      };
+    case "failed":
+      return {
+        title: "Provider callback failed",
+        description: "The local callback boundary stopped safely. Start sign-in again to retry.",
+      };
+    default:
+      return null;
+  }
 }
 
 function Card({
