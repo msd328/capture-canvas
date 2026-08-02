@@ -199,6 +199,21 @@ impl OidcCallbackRuntime {
         }
     }
 
+    fn expire_grant(&self, generation: u64) -> bool {
+        let mut state = self.state.lock();
+        if state.stage == CallbackStage::CodeReceived
+            && state
+                .grant
+                .as_ref()
+                .is_some_and(|grant| grant._generation == generation)
+        {
+            state.grant = None;
+            state.stage = CallbackStage::TimedOut;
+            return true;
+        }
+        false
+    }
+
     fn cancel(&self) -> bool {
         let mut state = self.state.lock();
         let had_pending = state.active.is_some() || state.grant.is_some();
@@ -275,7 +290,20 @@ pub(super) fn accept_code(
     supplied_state: String,
     authorization_code: String,
 ) -> Result<(), AcceptError> {
-    instance().accept_code(generation, supplied_state, authorization_code)
+    let result = instance().accept_code(generation, supplied_state, authorization_code);
+    if result.is_ok() {
+        let _ = std::thread::Builder::new()
+            .name("recorder-oidc-grant-expiry".to_string())
+            .spawn(move || {
+                std::thread::sleep(AUTHORIZATION_CODE_TTL);
+                if instance().expire_grant(generation) {
+                    eprintln!(
+                        "[Recorder][AuthHealth] stage=oidc_callback_code_expiry ok=true code_cleared=true"
+                    );
+                }
+            });
+    }
+    result
 }
 
 pub(super) fn accept_provider_error(
