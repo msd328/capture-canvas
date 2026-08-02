@@ -3,6 +3,7 @@ use crate::{
         OidcAuthorizationPreparation, OidcTransactionProbe, OidcTransactionStatus,
         SecureAuthProbe, SecureAuthStatus,
     },
+    oidc::{OidcAuthorizationRequest, OidcClientStatus},
     state::AppState,
 };
 use tauri::State;
@@ -37,6 +38,23 @@ pub async fn clear_secure_auth_session(state: State<'_, AppState>) -> Result<(),
     tauri::async_runtime::spawn_blocking(move || store.clear())
         .await
         .map_err(|error| worker_error("clear", error))?
+}
+
+#[tauri::command]
+pub async fn get_oidc_client_status() -> Result<OidcClientStatus, String> {
+    tauri::async_runtime::spawn_blocking(crate::oidc::client_status)
+        .await
+        .map_err(|error| worker_error("OIDC client status", error))?
+}
+
+#[tauri::command]
+pub async fn prepare_oidc_authorization(
+    state: State<'_, AppState>,
+) -> Result<OidcAuthorizationRequest, String> {
+    let store = state.auth.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::oidc::prepare_authorization(&store))
+        .await
+        .map_err(|error| worker_error("OIDC authorization prepare", error))?
 }
 
 #[tauri::command]
