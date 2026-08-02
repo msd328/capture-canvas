@@ -12,7 +12,6 @@ import type {
 } from "@/types/recorder";
 import type {
   OidcAuthorizationPreparation,
-  OidcAuthorizationRequest,
   OidcCallbackStatus,
   OidcClientStatus,
   OidcSignInLaunch,
@@ -83,8 +82,6 @@ export const getOidcClientStatus = () =>
     callbackMode: null,
     scopeCount: 0,
   }));
-export const prepareOidcAuthorization = () =>
-  call<OidcAuthorizationRequest>("prepare_oidc_authorization");
 export const startOidcSignIn = () => call<OidcSignInLaunch>("start_oidc_sign_in");
 export const getOidcCallbackStatus = () =>
   call<OidcCallbackStatus>("get_oidc_callback_status", undefined, async () => ({
