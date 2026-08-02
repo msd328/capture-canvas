@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import * as desktop from "@/services/desktop";
 import type { CameraInfo, MicrophoneInfo, RecorderSettings } from "@/types/recorder";
-import type { SecureAuthStatus } from "@/types/saas";
+import type { OidcClientStatus, SecureAuthStatus } from "@/types/saas";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,9 +38,12 @@ function SettingsPage() {
   const [cams, setCams] = useState<CameraInfo[]>([]);
   const [authStatus, setAuthStatus] = useState<SecureAuthStatus | null>(null);
   const [authStatusError, setAuthStatusError] = useState(false);
+  const [oidcClientStatus, setOidcClientStatus] = useState<OidcClientStatus | null>(null);
+  const [oidcClientError, setOidcClientError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [checkingSecureStore, setCheckingSecureStore] = useState(false);
   const [checkingSignInSecurity, setCheckingSignInSecurity] = useState(false);
+  const [checkingProviderConfiguration, setCheckingProviderConfiguration] = useState(false);
   const [clearingSession, setClearingSession] = useState(false);
 
   useEffect(() => {
@@ -66,6 +69,18 @@ function SettingsPage() {
       () => {
         if (cancelled) return;
         setAuthStatusError(true);
+      },
+    );
+
+    void desktop.getOidcClientStatus().then(
+      (status) => {
+        if (cancelled) return;
+        setOidcClientStatus(status);
+        setOidcClientError(false);
+      },
+      () => {
+        if (cancelled) return;
+        setOidcClientError(true);
       },
     );
 
@@ -139,6 +154,27 @@ function SettingsPage() {
     }
   };
 
+  const checkProviderConfiguration = async () => {
+    setCheckingProviderConfiguration(true);
+    try {
+      const status = await desktop.getOidcClientStatus();
+      setOidcClientStatus(status);
+      setOidcClientError(false);
+      if (status.configured) {
+        toast.success(
+          `Pinned OIDC configuration is ready (${status.callbackMode}, ${status.scopeCount} scopes)`,
+        );
+      } else {
+        toast.info("No OIDC provider is pinned into this build yet");
+      }
+    } catch (error) {
+      setOidcClientError(true);
+      toast.error(error instanceof Error ? error.message : "Provider configuration check failed");
+    } finally {
+      setCheckingProviderConfiguration(false);
+    }
+  };
+
   const clearCloudSession = async () => {
     setClearingSession(true);
     try {
@@ -166,6 +202,18 @@ function SettingsPage() {
     : authStatus?.signedIn
       ? "A local cloud session is stored securely."
       : "No cloud session is stored on this device.";
+  const oidcStatusTitle = oidcClientError
+    ? "OIDC build configuration is invalid"
+    : oidcClientStatus === null
+      ? "Checking provider configuration…"
+      : oidcClientStatus.configured
+        ? "OIDC provider contract pinned"
+        : "OIDC provider not configured";
+  const oidcStatusDescription = oidcClientError
+    ? "Recorder will keep cloud sign-in disabled until the build configuration is corrected."
+    : oidcClientStatus?.configured
+      ? `HTTPS authorization endpoint, ${oidcClientStatus.callbackMode} callback, and ${oidcClientStatus.scopeCount} scopes are fixed at build time.`
+      : "This build cannot prepare a cloud sign-in request.";
 
   return (
     <AppShell>
@@ -269,10 +317,15 @@ function SettingsPage() {
               <div className="font-medium text-foreground">{authStatusTitle}</div>
               <div className="mt-1 text-muted-foreground">{authStatusDescription}</div>
             </div>
+            <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs">
+              <div className="font-medium text-foreground">{oidcStatusTitle}</div>
+              <div className="mt-1 text-muted-foreground">{oidcStatusDescription}</div>
+            </div>
             <p className="text-xs text-muted-foreground">
-              The identity provider and API origin are not configured yet. Recorder will not make a
-              cloud request until those endpoints are selected and explicitly allowed. PKCE
-              verifiers stay inside the native process and expire after ten minutes.
+              Provider metadata is accepted only from compile-time settings. Runtime environment
+              variables, JSON settings, and WebView storage cannot redirect sign-in. Browser launch,
+              callback interception, and token exchange remain disabled until the selected provider
+              is integrated and validated.
             </p>
             <div className="flex flex-wrap justify-end gap-2">
               {authStatus?.signedIn ? (
@@ -286,6 +339,15 @@ function SettingsPage() {
                   {clearingSession ? "Clearing…" : "Clear local session"}
                 </Button>
               ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={checkingProviderConfiguration}
+                onClick={checkProviderConfiguration}
+              >
+                {checkingProviderConfiguration ? "Checking…" : "Check provider configuration"}
+              </Button>
               <Button
                 type="button"
                 variant="outline"
