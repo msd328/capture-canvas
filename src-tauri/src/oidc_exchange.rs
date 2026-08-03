@@ -117,7 +117,7 @@ impl<'de> Deserialize<'de> for TokenField {
     {
         struct TokenFieldVisitor;
 
-        impl Visitor<'_> for TokenFieldVisitor {
+        impl<'de> Visitor<'de> for TokenFieldVisitor {
             type Value = TokenField;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -350,7 +350,7 @@ fn build_authorization_code_request(
     )?;
     if !(MIN_PKCE_VERIFIER_BYTES..=MAX_PKCE_VERIFIER_BYTES).contains(&code_verifier.len())
         || !code_verifier.iter().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
+            byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'.' | b'_' | b'~')
         })
     {
         return Err("oidc_exchange_code_verifier_invalid".to_string());
@@ -389,7 +389,7 @@ fn append_form_field(body: &mut Vec<u8>, name: &[u8], value: &[u8]) {
     body.extend_from_slice(name);
     body.push(b'=');
     for byte in value {
-        match byte {
+        match *byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
                 body.push(*byte);
             }
@@ -397,8 +397,8 @@ fn append_form_field(body: &mut Vec<u8>, name: &[u8], value: &[u8]) {
             _ => {
                 const HEX: &[u8; 16] = b"0123456789ABCDEF";
                 body.push(b'%');
-                body.push(HEX[(byte >> 4) as usize]);
-                body.push(HEX[(byte & 0x0f) as usize]);
+                body.push(HEX[(*byte >> 4) as usize]);
+                body.push(HEX[(*byte & 0x0f) as usize]);
             }
         }
     }
@@ -473,7 +473,9 @@ fn parse_token_response(bytes: &[u8]) -> Result<ParsedTokenResponse, String> {
 fn validate_token(value: &str, maximum: usize, field: &str) -> Result<(), String> {
     if value.is_empty()
         || value.len() > maximum
-        || value.bytes().any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+        || value
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
     {
         return Err(format!("oidc_token_response_{field}_invalid"));
     }
@@ -553,7 +555,14 @@ mod tests {
         )
         .expect("documented token response should parse");
         assert_eq!(response.expires_in, 3600);
-        assert_eq!(response.scope, ["openid", "email", "profile"]);
+        assert_eq!(
+            response.scope,
+            vec![
+                "openid".to_string(),
+                "email".to_string(),
+                "profile".to_string()
+            ]
+        );
     }
 
     #[test]
