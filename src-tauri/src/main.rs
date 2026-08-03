@@ -12,6 +12,7 @@ mod capture;
 mod commands;
 mod encoding;
 mod oidc;
+mod oidc_exchange;
 mod oidc_loopback;
 mod oidc_token;
 // The bounded WinRT wait macro assigns its timeout flag before returning an
@@ -46,10 +47,12 @@ fn main() {
             commands::auth::probe_secure_auth_store,
             commands::auth::clear_secure_auth_session,
             commands::auth::get_oidc_client_status,
+            commands::auth::get_oidc_exchange_contract_status,
             commands::auth::start_oidc_sign_in,
             commands::auth::get_oidc_callback_status,
             commands::auth::cancel_oidc_transaction,
             commands::auth::probe_oidc_transaction,
+            commands::auth::probe_oidc_exchange_contract,
             commands::devices::list_displays,
             commands::devices::list_windows,
             commands::devices::list_microphones,
