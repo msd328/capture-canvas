@@ -18,6 +18,10 @@ tokio = { version = "1", features = ["full"] }
 parking_lot = "0.12"
 anyhow = "1"
 base64 = "0.22"
+# Verify pinned Supabase RS256/ES256 ID-token signatures in native Rust. This
+# exact version is already present through rustls; declaring it directly makes
+# the verifier dependency explicit without changing the resolved package set.
+ring = "0.17.14"
 # Public-client OAuth token exchange uses a bounded rustls HTTPS client. Defaults
 # are disabled so runtime proxy discovery and unrelated default features are not
 # enabled. Compression decoders are compiled only so every algorithm can be
