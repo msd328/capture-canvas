@@ -13,6 +13,8 @@ import type {
 import type {
   OidcCallbackStatus,
   OidcClientStatus,
+  OidcExchangeContractStatus,
+  OidcExchangeProbe,
   OidcSignInLaunch,
   OidcTransactionProbe,
   SecureAuthProbe,
@@ -85,6 +87,18 @@ export const getOidcClientStatus = () =>
     audienceConfigured: false,
     jwksUriHttps: false,
   }));
+export const getOidcExchangeContractStatus = () =>
+  call<OidcExchangeContractStatus>("get_oidc_exchange_contract_status", undefined, async () => ({
+    configured: false,
+    publicClient: true,
+    authorizationCodeFormSupported: true,
+    refreshTokenFormSupported: true,
+    strictResponseParser: true,
+    networkExchangeEnabled: false,
+    identityValidationEnabled: false,
+    maxRequestBytes: 16 * 1024,
+    maxResponseBytes: 64 * 1024,
+  }));
 export const startOidcSignIn = () => call<OidcSignInLaunch>("start_oidc_sign_in");
 export const getOidcCallbackStatus = () =>
   call<OidcCallbackStatus>("get_oidc_callback_status", undefined, async () => ({
@@ -103,6 +117,16 @@ export const probeOidcTransaction = () =>
     nonceRetained: false,
     replayRejected: false,
     verifierKeptNative: false,
+  }));
+export const probeOidcExchangeContract = () =>
+  call<OidcExchangeProbe>("probe_oidc_exchange_contract", undefined, async () => ({
+    authorizationCodeFormOk: false,
+    refreshTokenFormOk: false,
+    tokenResponseOk: false,
+    duplicateFieldRejected: false,
+    unknownFieldRejected: false,
+    oversizedResponseRejected: false,
+    secretsKeptNative: false,
   }));
 
 export const listDisplays = () =>
