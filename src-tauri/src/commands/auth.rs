@@ -1,5 +1,6 @@
 use crate::{
     auth::{OidcTransactionProbe, SecureAuthProbe, SecureAuthStatus},
+    oidc_exchange::{OidcExchangeContractStatus, OidcExchangeProbe},
     oidc_loopback::{OidcCallbackStatus, OidcSignInLaunch},
     state::AppState,
 };
@@ -77,6 +78,13 @@ pub async fn get_oidc_client_status() -> Result<OidcClientReadiness, String> {
 }
 
 #[tauri::command]
+pub async fn get_oidc_exchange_contract_status() -> Result<OidcExchangeContractStatus, String> {
+    tauri::async_runtime::spawn_blocking(crate::oidc_exchange::status)
+        .await
+        .map_err(|error| worker_error("OIDC exchange contract status", error))?
+}
+
+#[tauri::command]
 pub async fn start_oidc_sign_in(state: State<'_, AppState>) -> Result<OidcSignInLaunch, String> {
     let store = state.auth.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -115,4 +123,11 @@ pub async fn probe_oidc_transaction(
     tauri::async_runtime::spawn_blocking(move || store.probe_oidc_transaction())
         .await
         .map_err(|error| worker_error("OIDC probe", error))
+}
+
+#[tauri::command]
+pub async fn probe_oidc_exchange_contract() -> Result<OidcExchangeProbe, String> {
+    tauri::async_runtime::spawn_blocking(crate::oidc_exchange::probe)
+        .await
+        .map_err(|error| worker_error("OIDC exchange contract probe", error))
 }
