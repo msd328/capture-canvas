@@ -92,9 +92,7 @@ pub fn start_sign_in(store: &SecureAuthStore) -> Result<OidcSignInLaunch, String
         return Err(error);
     }
 
-    eprintln!(
-        "[Recorder][AuthHealth] stage=oidc_browser_launch ok=true callback_mode=loopback"
-    );
+    eprintln!("[Recorder][AuthHealth] stage=oidc_browser_launch ok=true callback_mode=loopback");
     Ok(OidcSignInLaunch {
         launched: true,
         callback_mode: "loopback",
@@ -136,8 +134,9 @@ fn parse_loopback_endpoint(raw: &str) -> Result<LoopbackEndpoint, String> {
         || url.fragment().is_some()
         || url.path() != CALLBACK_PATH
     {
-        return Err("OIDC browser launch currently requires the fixed loopback callback path"
-            .to_string());
+        return Err(
+            "OIDC browser launch currently requires the fixed loopback callback path".to_string(),
+        );
     }
 
     let port = url
@@ -167,9 +166,7 @@ fn run_listener(
 ) {
     let started = Instant::now();
     let mut invalid_callbacks = 0usize;
-    eprintln!(
-        "[Recorder][AuthHealth] stage=oidc_callback_listen ok=true callback_mode=loopback"
-    );
+    eprintln!("[Recorder][AuthHealth] stage=oidc_callback_listen ok=true callback_mode=loopback");
 
     while started.elapsed() < CALLBACK_TIMEOUT && runtime::is_active(generation) {
         match listener.accept() {
