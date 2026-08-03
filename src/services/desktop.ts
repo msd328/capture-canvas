@@ -88,17 +88,21 @@ export const getOidcClientStatus = () =>
     jwksUriHttps: false,
   }));
 export const getOidcExchangeContractStatus = () =>
-  call<OidcExchangeContractStatus>("get_oidc_exchange_contract_status", undefined, async () => ({
-    configured: false,
-    publicClient: true,
-    authorizationCodeFormSupported: true,
-    refreshTokenFormSupported: true,
-    strictResponseParser: true,
-    networkExchangeEnabled: false,
-    identityValidationEnabled: false,
-    maxRequestBytes: 16 * 1024,
-    maxResponseBytes: 64 * 1024,
-  }));
+  call<OidcExchangeContractStatus>(
+    "get_oidc_exchange_contract_status",
+    undefined,
+    async () => ({
+      configured: false,
+      publicClient: true,
+      authorizationCodeFormSupported: true,
+      refreshTokenFormSupported: true,
+      strictResponseParser: true,
+      networkExchangeEnabled: false,
+      identityValidationEnabled: false,
+      maxRequestBytes: 16 * 1024,
+      maxResponseBytes: 64 * 1024,
+    }),
+  );
 export const startOidcSignIn = () => call<OidcSignInLaunch>("start_oidc_sign_in");
 export const getOidcCallbackStatus = () =>
   call<OidcCallbackStatus>("get_oidc_callback_status", undefined, async () => ({
