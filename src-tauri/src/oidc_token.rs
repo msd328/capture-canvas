@@ -81,7 +81,9 @@ impl OidcTokenConfig {
         let jwks_uri = required_value(jwks_uri, "jwks_uri_empty")?;
 
         if audience.chars().count() > MAX_AUDIENCE_CHARS
-            || audience.chars().any(|character| character.is_control() || character.is_whitespace())
+            || audience
+                .chars()
+                .any(|character| character.is_control() || character.is_whitespace())
         {
             return Err(OidcTokenConfigError::new("audience_invalid"));
         }
@@ -102,9 +104,7 @@ impl OidcTokenConfig {
 pub fn status() -> Result<OidcTokenConfigStatus, String> {
     match OidcTokenConfig::from_build() {
         Ok(None) => {
-            eprintln!(
-                "[Recorder][AuthHealth] stage=oidc_token_config ok=true configured=false"
-            );
+            eprintln!("[Recorder][AuthHealth] stage=oidc_token_config ok=true configured=false");
             Ok(OidcTokenConfigStatus {
                 configured: false,
                 token_endpoint_https: false,
@@ -166,10 +166,7 @@ fn required_value<'a>(
         .ok_or_else(|| OidcTokenConfigError::new(empty_code))
 }
 
-fn parse_https_endpoint(
-    raw: &str,
-    field: &'static str,
-) -> Result<Url, OidcTokenConfigError> {
+fn parse_https_endpoint(raw: &str, field: &'static str) -> Result<Url, OidcTokenConfigError> {
     if raw.len() > MAX_ENDPOINT_BYTES {
         return Err(OidcTokenConfigError::new(match field {
             "token_endpoint" => "token_endpoint_too_large",
