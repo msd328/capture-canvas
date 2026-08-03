@@ -1,9 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import * as desktop from "@/services/desktop";
 import type { CameraInfo, MicrophoneInfo, RecorderSettings } from "@/types/recorder";
 import type {
+  NativeOidcSessionStatus,
   OidcCallbackStatus,
   OidcClientStatus,
   OidcExchangeContractStatus,
@@ -50,13 +51,16 @@ function SettingsPage() {
   );
   const [oidcExchangeError, setOidcExchangeError] = useState(false);
   const [oidcCallbackStatus, setOidcCallbackStatus] = useState<OidcCallbackStatus | null>(null);
+  const [oidcSessionStatus, setOidcSessionStatus] = useState<NativeOidcSessionStatus | null>(null);
   const [saving, setSaving] = useState(false);
   const [checkingSecureStore, setCheckingSecureStore] = useState(false);
   const [checkingSignInSecurity, setCheckingSignInSecurity] = useState(false);
   const [checkingProviderConfiguration, setCheckingProviderConfiguration] = useState(false);
   const [startingCloudSignIn, setStartingCloudSignIn] = useState(false);
+  const [completingCloudSignIn, setCompletingCloudSignIn] = useState(false);
   const [cancellingCloudSignIn, setCancellingCloudSignIn] = useState(false);
   const [clearingSession, setClearingSession] = useState(false);
+  const completionRequested = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -112,6 +116,10 @@ function SettingsPage() {
       if (!cancelled) setOidcCallbackStatus(status);
     });
 
+    void desktop.getOidcSessionStatus().then((status) => {
+      if (!cancelled) setOidcSessionStatus(status);
+    });
+
     return () => {
       cancelled = true;
     };
@@ -134,6 +142,37 @@ function SettingsPage() {
       window.clearInterval(timer);
     };
   }, [oidcCallbackStatus?.pending]);
+
+  useEffect(() => {
+    if (oidcCallbackStatus?.stage !== "codeReceived" || completionRequested.current) return;
+    completionRequested.current = true;
+    let cancelled = false;
+    setCompletingCloudSignIn(true);
+
+    void desktop.completeOidcSignIn().then(
+      async (status) => {
+        if (cancelled) return;
+        setOidcSessionStatus(status);
+        setOidcCallbackStatus(await desktop.getOidcCallbackStatus());
+        toast.success("Provider identity verified for this Recorder session");
+      },
+      async (error) => {
+        if (cancelled) return;
+        setOidcCallbackStatus(await desktop.getOidcCallbackStatus());
+        toast.error(
+          error instanceof Error
+            ? error.message
+            : "Provider identity verification failed. Start sign-in again to retry.",
+        );
+      },
+    ).finally(() => {
+      if (!cancelled) setCompletingCloudSignIn(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [oidcCallbackStatus?.stage]);
 
   if (!settings) {
     return (
@@ -243,6 +282,7 @@ function SettingsPage() {
 
   const startCloudSignIn = async () => {
     setStartingCloudSignIn(true);
+    completionRequested.current = false;
     try {
       await desktop.startOidcSignIn();
       setOidcCallbackStatus(await desktop.getOidcCallbackStatus());
@@ -271,9 +311,16 @@ function SettingsPage() {
     setClearingSession(true);
     try {
       await desktop.clearSecureAuthSession();
-      setAuthStatus(await desktop.getSecureAuthStatus());
-      setOidcCallbackStatus(await desktop.getOidcCallbackStatus());
+      const [secureStatus, sessionStatus, callbackStatus] = await Promise.all([
+        desktop.getSecureAuthStatus(),
+        desktop.getOidcSessionStatus(),
+        desktop.getOidcCallbackStatus(),
+      ]);
+      setAuthStatus(secureStatus);
+      setOidcSessionStatus(sessionStatus);
+      setOidcCallbackStatus(callbackStatus);
       setAuthStatusError(false);
+      completionRequested.current = false;
       toast.success("Local cloud session cleared");
     } catch (error) {
       setAuthStatusError(true);
@@ -293,8 +340,16 @@ function SettingsPage() {
   const authStatusDescription = authStatusError
     ? "Recorder settings remain available. Run the readiness check to retry secure storage."
     : authStatus?.signedIn
-      ? "A local cloud session is stored securely."
-      : "No cloud session is stored on this device.";
+      ? "A durable local cloud credential is stored securely."
+      : "No durable cloud credential is stored on this device.";
+  const sessionStatusTitle = oidcSessionStatus?.active
+    ? "Provider identity verified"
+    : oidcSessionStatus === null
+      ? "Checking native session…"
+      : "No verified native session";
+  const sessionStatusDescription = oidcSessionStatus?.active
+    ? `The access token is held only in native memory until ${formatSessionExpiry(oidcSessionStatus.expiresAt)}. Paid access has not been checked.`
+    : "A successful provider exchange and signed ID-token verification are required. No paid access is granted locally.";
   const oidcStatusTitle = oidcClientError
     ? "OIDC build configuration is invalid"
     : oidcClientStatus === null
@@ -312,21 +367,28 @@ function SettingsPage() {
     : oidcExchangeStatus === null
       ? "Checking token exchange contract…"
       : oidcExchangeStatus.configured
-        ? "Native token exchange contract ready"
+        ? "Native verified exchange ready"
         : "Token exchange provider not configured";
   const exchangeStatusDescription = oidcExchangeError
     ? "Recorder will not process provider tokens until the native contract can be checked."
-    : oidcExchangeStatus?.strictResponseParser && oidcExchangeStatus.boundedHttpsTransportSupported
-      ? `Public-client encoding, strict bounded JSON parsing, and a ${oidcExchangeStatus.totalTimeoutSeconds}-second HTTPS transport are ready. Live exchange remains disabled until signed identity validation is enabled.`
-      : "Native token response validation or bounded HTTPS transport is unavailable.";
-  const callbackStatusText = describeCallbackStatus(oidcCallbackStatus);
+    : oidcExchangeStatus?.networkExchangeEnabled &&
+        oidcExchangeStatus.identityValidationEnabled &&
+        oidcExchangeStatus.strictResponseParser &&
+        oidcExchangeStatus.boundedHttpsTransportSupported
+      ? `A ${oidcExchangeStatus.totalTimeoutSeconds}-second bounded HTTPS exchange, JWKS signature verification, and strict identity validation are enabled. Refresh persistence and paid-access authorization remain disabled.`
+      : "Native token exchange or signed identity validation is unavailable.";
+  const callbackStatusText = describeCallbackStatus(oidcCallbackStatus, completingCloudSignIn);
   const canStartCloudSignIn =
     oidcClientStatus?.configured === true &&
     oidcExchangeStatus?.configured === true &&
+    oidcExchangeStatus.networkExchangeEnabled &&
+    oidcExchangeStatus.identityValidationEnabled &&
     oidcClientStatus.callbackMode === "loopback" &&
     authStatus?.supported === true &&
     authStatus.signedIn === false &&
-    !oidcCallbackStatus?.pending;
+    oidcSessionStatus?.active !== true &&
+    !oidcCallbackStatus?.pending &&
+    !completingCloudSignIn;
 
   return (
     <AppShell>
@@ -423,12 +485,16 @@ function SettingsPage() {
 
         <Card
           title="Cloud account"
-          description="Secure local account storage for the upcoming upload and sharing service."
+          description="Verified native identity for the upcoming paid upload and sharing service."
         >
           <div className="w-[26rem] max-w-full space-y-3">
             <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs">
               <div className="font-medium text-foreground">{authStatusTitle}</div>
               <div className="mt-1 text-muted-foreground">{authStatusDescription}</div>
+            </div>
+            <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs">
+              <div className="font-medium text-foreground">{sessionStatusTitle}</div>
+              <div className="mt-1 text-muted-foreground">{sessionStatusDescription}</div>
             </div>
             <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs">
               <div className="font-medium text-foreground">{oidcStatusTitle}</div>
@@ -445,14 +511,13 @@ function SettingsPage() {
               </div>
             ) : null}
             <p className="text-xs text-muted-foreground">
-              Provider metadata is accepted only from compile-time settings. A configured numeric
-              loopback callback can open the system browser and receive one bounded response. Native
-              code/verifier/nonce handoff, request encoding, strict token-response parsing, and
-              bounded HTTPS transport are implemented. Live exchange, signed-token validation, and
-              account creation remain disabled.
+              Provider metadata is accepted only from compile-time settings. The WebView receives no
+              authorization code, PKCE verifier, nonce, token, subject, issuer, audience, or key
+              material. A verified in-memory identity session still does not grant paid access;
+              Recorder must obtain that decision from the authenticated access API.
             </p>
             <div className="flex flex-wrap justify-end gap-2">
-              {authStatus?.signedIn ? (
+              {authStatus?.signedIn || oidcSessionStatus?.active ? (
                 <Button
                   type="button"
                   variant="outline"
@@ -526,6 +591,7 @@ function SettingsPage() {
 
 function describeCallbackStatus(
   status: OidcCallbackStatus | null,
+  completing: boolean,
 ): { title: string; description: string } | null {
   switch (status?.stage) {
     case "waiting":
@@ -535,15 +601,15 @@ function describeCallbackStatus(
       };
     case "codeReceived":
       return {
-        title: "Authorization response captured",
+        title: completing ? "Verifying provider identity" : "Authorization response captured",
         description:
-          "The one-time code is held only in native memory. Live token exchange remains gated on signed identity validation.",
+          "The one-time code is being consumed by native token exchange, signature verification, and identity validation.",
       };
     case "grantTaken":
       return {
         title: "Authorization material consumed",
         description:
-          "The private native code/verifier/nonce handoff completed. No signed-in session exists until token validation succeeds.",
+          "The one-time code/verifier/nonce grant cannot be replayed. Check the native-session status or start sign-in again after a failure.",
       };
     case "providerError":
       return {
@@ -568,6 +634,13 @@ function describeCallbackStatus(
     default:
       return null;
   }
+}
+
+function formatSessionExpiry(expiresAt: string | null): string {
+  if (!expiresAt) return "its native expiry deadline";
+  const parsed = new Date(expiresAt);
+  if (Number.isNaN(parsed.getTime())) return "its native expiry deadline";
+  return parsed.toLocaleString();
 }
 
 function Card({
