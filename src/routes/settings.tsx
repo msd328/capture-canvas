@@ -3,11 +3,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import * as desktop from "@/services/desktop";
 import type { CameraInfo, MicrophoneInfo, RecorderSettings } from "@/types/recorder";
-import type {
-  OidcCallbackStatus,
-  OidcClientStatus,
-  SecureAuthStatus,
-} from "@/types/saas";
+import type { OidcCallbackStatus, OidcClientStatus, SecureAuthStatus } from "@/types/saas";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
