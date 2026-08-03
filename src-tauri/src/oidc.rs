@@ -11,7 +11,7 @@ use serde::Serialize;
 use std::net::IpAddr;
 use tauri::Url;
 
-const DEFAULT_SCOPES: &str = "openid profile email offline_access";
+const DEFAULT_SCOPES: &str = "openid email profile";
 const MAX_AUTHORIZATION_URL_BYTES: usize = 8 * 1024;
 const MAX_CLIENT_ID_CHARS: usize = 512;
 const MAX_SCOPE_COUNT: usize = 16;
@@ -302,6 +302,9 @@ fn parse_scopes(raw: &str) -> Result<Vec<String>, OidcConfigError> {
         if scope.len() > MAX_SCOPE_CHARS || !scope.bytes().all(is_valid_scope_byte) {
             return Err(OidcConfigError::new("scope_invalid"));
         }
+        if !matches!(scope, "openid" | "email" | "profile" | "phone") {
+            return Err(OidcConfigError::new("scope_unsupported"));
+        }
         if !scopes.iter().any(|existing| existing == scope) {
             scopes.push(scope.to_string());
         }
@@ -332,7 +335,7 @@ mod tests {
             Some("https://identity.example.test/oauth2/authorize"),
             Some("recorder desktop client"),
             Some("capture-canvas://auth/callback"),
-            Some("openid profile email offline_access"),
+            Some("openid profile email"),
         )
         .expect("test OIDC config should be valid")
         .expect("test OIDC config should be present")
@@ -434,6 +437,20 @@ mod tests {
             )
             .expect_err("openid scope must be required"),
             OidcConfigError::new("scope_missing_openid")
+        );
+    }
+
+    #[test]
+    fn unsupported_supabase_scope_is_rejected() {
+        assert_eq!(
+            OidcClientConfig::from_values(
+                Some("https://identity.example.test/authorize"),
+                Some("client"),
+                Some("capture-canvas://auth/callback"),
+                Some("openid offline_access"),
+            )
+            .expect_err("unsupported Supabase scope must fail"),
+            OidcConfigError::new("scope_unsupported")
         );
     }
 
