@@ -1,3 +1,4 @@
+import { accessTokenVerificationConfigured } from "./access-readiness";
 import {
   CreateUploadSessionRequestSchema,
   MAX_RECORDING_UPLOAD_BYTES,
@@ -115,7 +116,8 @@ function configuredUploadLimit(env: unknown): number {
 function capabilities(env: unknown) {
   const authenticationConfigured =
     isTrustedServerUrl(envValue(env, "RECORDER_AUTH_ISSUER")) &&
-    Boolean(envValue(env, "RECORDER_AUTH_AUDIENCE"));
+    Boolean(envValue(env, "RECORDER_AUTH_AUDIENCE")) &&
+    accessTokenVerificationConfigured(env);
   const uploadsConfigured =
     isTrustedServerUrl(envValue(env, "RECORDER_UPLOAD_ORIGIN")) &&
     Boolean(envValue(env, "RECORDER_UPLOAD_BUCKET"));
