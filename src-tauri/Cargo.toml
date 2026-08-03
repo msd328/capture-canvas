@@ -18,6 +18,10 @@ tokio = { version = "1", features = ["full"] }
 parking_lot = "0.12"
 anyhow = "1"
 base64 = "0.22"
+# Public-client OAuth token exchange uses a bounded rustls HTTPS client. Defaults
+# are disabled so runtime proxy discovery, compression and unrelated features are
+# not silently enabled by this direct dependency.
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls"] }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
