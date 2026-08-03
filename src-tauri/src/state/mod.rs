@@ -124,9 +124,7 @@ impl LibraryStore {
 
     fn notify_changed(&self, reason: &'static str) -> u64 {
         let revision = self.revision.bump();
-        eprintln!(
-            "[Recorder][LibraryHealth] stage=notify reason={reason} revision={revision}"
-        );
+        eprintln!("[Recorder][LibraryHealth] stage=notify reason={reason} revision={revision}");
         revision
     }
 
