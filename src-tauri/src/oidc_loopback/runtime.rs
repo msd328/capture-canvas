@@ -74,11 +74,13 @@ impl NativeAuthorizationGrant {
     }
 }
 
+#[allow(dead_code)]
 pub(super) struct NativeOidcExchangeGrant {
     authorization_code: SecretText,
     material: OidcExchangeMaterial,
 }
 
+#[allow(dead_code)]
 impl NativeOidcExchangeGrant {
     pub(super) fn authorization_code(&self) -> &[u8] {
         self.authorization_code.as_bytes()
@@ -557,9 +559,7 @@ mod tests {
 
         assert!(matches!(
             runtime.take_exchange_grant(&store),
-            Err(ExchangeGrantTakeError::Auth(
-                OidcConsumeError::StateMismatch
-            ))
+            Err(ExchangeGrantTakeError::Auth(OidcConsumeError::StateMismatch))
         ));
         assert_eq!(runtime.status().stage, "failed");
         assert!(!runtime.status().code_received);
