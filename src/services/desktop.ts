@@ -97,10 +97,16 @@ export const getOidcExchangeContractStatus = () =>
       authorizationCodeFormSupported: true,
       refreshTokenFormSupported: true,
       strictResponseParser: true,
+      boundedHttpsTransportSupported: false,
+      redirectsDisabled: true,
+      runtimeProxyDisabled: true,
       networkExchangeEnabled: false,
       identityValidationEnabled: false,
       maxRequestBytes: 16 * 1024,
       maxResponseBytes: 64 * 1024,
+      connectTimeoutSeconds: 5,
+      readTimeoutSeconds: 5,
+      totalTimeoutSeconds: 12,
     }),
   );
 export const startOidcSignIn = () => call<OidcSignInLaunch>("start_oidc_sign_in");
@@ -130,6 +136,10 @@ export const probeOidcExchangeContract = () =>
     duplicateFieldRejected: false,
     unknownFieldRejected: false,
     oversizedResponseRejected: false,
+    transportClientOk: false,
+    strictJsonHeadersOk: false,
+    redirectResponseRejected: false,
+    oversizedDeclaredResponseRejected: false,
     secretsKeptNative: false,
   }));
 
