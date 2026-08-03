@@ -57,6 +57,7 @@ struct NativeAccessSession {
 #[derive(Default)]
 struct SessionState {
     active: Option<NativeAccessSession>,
+    generation: u64,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -73,13 +74,19 @@ fn runtime() -> &'static Mutex<SessionState> {
     SESSION.get_or_init(|| Mutex::new(SessionState::default()))
 }
 
+/// Exchange and verify the one-time callback grant, then install a native session.
+///
+/// The generation snapshot prevents a concurrent clear/logout operation from being
+/// undone by a network request that completes later.
 pub(crate) async fn establish_verified_session(
     store: &SecureAuthStore,
 ) -> Result<NativeOidcSessionStatus, String> {
+    let expected_generation = generation();
     let exchange = oidc_exchange::exchange_authorization_code(store).await?;
     let identity =
         oidc_verify::verify_id_token(exchange.id_token(), exchange.expected_nonce()).await?;
     let status = install_session(
+        expected_generation,
         identity.subject(),
         identity.expires_at(),
         exchange.access_token(),
@@ -98,7 +105,12 @@ pub(crate) async fn establish_verified_session(
     Ok(status)
 }
 
+fn generation() -> u64 {
+    runtime().lock().generation
+}
+
 fn install_session(
+    expected_generation: u64,
     subject: Uuid,
     identity_expires_at: i64,
     access_token: &[u8],
@@ -121,13 +133,17 @@ fn install_session(
     let access_token = SecretBytes::from_slice(access_token)?;
     let lifetime = Duration::from_secs(lifetime_seconds);
     let expires_at = now_utc + chrono::Duration::seconds(lifetime_seconds as i64);
-    runtime().lock().active = Some(NativeAccessSession {
+    let mut state = runtime().lock();
+    if state.generation != expected_generation {
+        return Err("session_cancelled");
+    }
+    state.active = Some(NativeAccessSession {
         subject,
         access_token,
         expires_at_instant: now + lifetime,
         expires_at,
     });
-    Ok(status_at(now))
+    Ok(status_from_state(&mut state, now))
 }
 
 pub(crate) fn status() -> NativeOidcSessionStatus {
@@ -136,6 +152,10 @@ pub(crate) fn status() -> NativeOidcSessionStatus {
 
 fn status_at(now: Instant) -> NativeOidcSessionStatus {
     let mut state = runtime().lock();
+    status_from_state(&mut state, now)
+}
+
+fn status_from_state(state: &mut SessionState, now: Instant) -> NativeOidcSessionStatus {
     if state
         .active
         .as_ref()
@@ -152,7 +172,9 @@ fn status_at(now: Instant) -> NativeOidcSessionStatus {
 }
 
 pub(crate) fn clear() -> bool {
-    runtime().lock().active.take().is_some()
+    let mut state = runtime().lock();
+    state.generation = state.generation.wrapping_add(1);
+    state.active.take().is_some()
 }
 
 #[allow(dead_code)]
@@ -196,6 +218,7 @@ mod tests {
         let now_utc = Utc::now();
         let subject = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
         let status = install_session(
+            generation(),
             subject,
             now_utc.timestamp() + 120,
             b"header.payload.signature",
@@ -232,12 +255,22 @@ mod tests {
         let now = Instant::now();
         let now_utc = Utc::now();
         let subject = Uuid::new_v4();
+        let current_generation = generation();
         assert_eq!(
-            install_session(subject, now_utc.timestamp(), b"a.b.c", 60, now, now_utc),
+            install_session(
+                current_generation,
+                subject,
+                now_utc.timestamp(),
+                b"a.b.c",
+                60,
+                now,
+                now_utc,
+            ),
             Err("identity_expired")
         );
         assert_eq!(
             install_session(
+                current_generation,
                 subject,
                 now_utc.timestamp() + 60,
                 b"bad token",
@@ -257,6 +290,7 @@ mod tests {
         let now = Instant::now();
         let now_utc = Utc::now();
         install_session(
+            generation(),
             Uuid::new_v4(),
             now_utc.timestamp() + 300,
             b"a.b.c",
@@ -268,5 +302,29 @@ mod tests {
         assert!(clear());
         assert!(!clear());
         assert!(with_access_token(|_, _| Ok(())).is_err());
+    }
+
+    #[test]
+    fn clear_during_exchange_prevents_late_session_install() {
+        let _guard = test_guard();
+        reset();
+        let expected_generation = generation();
+        let now = Instant::now();
+        let now_utc = Utc::now();
+        clear();
+
+        assert_eq!(
+            install_session(
+                expected_generation,
+                Uuid::new_v4(),
+                now_utc.timestamp() + 300,
+                b"a.b.c",
+                300,
+                now,
+                now_utc,
+            ),
+            Err("session_cancelled")
+        );
+        assert!(!status().active);
     }
 }
