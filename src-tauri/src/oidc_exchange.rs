@@ -328,7 +328,8 @@ pub fn probe() -> OidcExchangeProbe {
     .is_ok_and(|body| {
         body.windows(b"grant_type=authorization_code".len())
             .any(|window| window == b"grant_type=authorization_code")
-            && body.windows(b"code=code+value".len())
+            && body
+                .windows(b"code=code+value".len())
                 .any(|window| window == b"code=code+value")
     });
     let refresh_token_form_ok = build_refresh_token_request(b"refresh.token", b"recorder-client")
@@ -381,7 +382,10 @@ pub fn probe() -> OidcExchangeProbe {
     let transport_client_ok = build_transport_client().is_ok();
 
     let mut valid_headers = HeaderMap::new();
-    valid_headers.insert(CONTENT_TYPE, "application/json; charset=utf-8".parse().unwrap());
+    valid_headers.insert(
+        CONTENT_TYPE,
+        "application/json; charset=utf-8".parse().unwrap(),
+    );
     valid_headers.insert(CONTENT_LENGTH, "2".parse().unwrap());
     let strict_json_headers_ok =
         validate_success_response_headers(StatusCode::OK, &valid_headers).is_ok();
@@ -463,17 +467,13 @@ pub(crate) async fn exchange_authorization_code(
         return Err("OIDC token endpoint response origin changed unexpectedly".to_string());
     }
     validate_success_response_headers(response.status(), response.headers()).map_err(|code| {
-        eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_token_response_headers ok=false code={code}"
-        );
+        eprintln!("[Recorder][AuthHealth] stage=oidc_token_response_headers ok=false code={code}");
         "OIDC token endpoint returned an unacceptable response".to_string()
     })?;
     let response_bytes = read_bounded_response(response).await?;
     let response_size = response_bytes.len();
     let tokens = parse_token_response(&response_bytes).map_err(|code| {
-        eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_token_response_parse ok=false code={code}"
-        );
+        eprintln!("[Recorder][AuthHealth] stage=oidc_token_response_parse ok=false code={code}");
         "OIDC token endpoint returned an invalid token response".to_string()
     })?;
 
@@ -545,9 +545,7 @@ fn validate_success_response_headers(
     if content_types.next().is_some() {
         return Err("content_type_multiple");
     }
-    let content_type = content_type
-        .to_str()
-        .map_err(|_| "content_type_invalid")?;
+    let content_type = content_type.to_str().map_err(|_| "content_type_invalid")?;
     let mut parts = content_type.split(';');
     if !parts
         .next()
@@ -581,9 +579,7 @@ fn validate_success_response_headers(
         if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err("content_length_invalid");
         }
-        let declared = value
-            .parse::<u64>()
-            .map_err(|_| "content_length_invalid")?;
+        let declared = value.parse::<u64>().map_err(|_| "content_length_invalid")?;
         if declared > MAX_TOKEN_RESPONSE_BYTES as u64 {
             return Err("content_length_too_large");
         }
@@ -642,16 +638,11 @@ fn build_authorization_code_request(
         "authorization_code",
     )?;
     validate_opaque(client_id, 1, MAX_CLIENT_ID_BYTES, "client_id")?;
-    validate_opaque(
-        redirect_uri,
-        1,
-        MAX_REDIRECT_URI_BYTES,
-        "redirect_uri",
-    )?;
+    validate_opaque(redirect_uri, 1, MAX_REDIRECT_URI_BYTES, "redirect_uri")?;
     if !(MIN_PKCE_VERIFIER_BYTES..=MAX_PKCE_VERIFIER_BYTES).contains(&code_verifier.len())
-        || !code_verifier.iter().all(|byte| {
-            byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'.' | b'_' | b'~')
-        })
+        || !code_verifier
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'-' | b'.' | b'_' | b'~'))
     {
         return Err("oidc_exchange_code_verifier_invalid".to_string());
     }
@@ -704,7 +695,12 @@ fn append_form_field(body: &mut Vec<u8>, name: &[u8], value: &[u8]) {
     }
 }
 
-fn validate_opaque(value: &[u8], minimum: usize, maximum: usize, field: &str) -> Result<(), String> {
+fn validate_opaque(
+    value: &[u8],
+    minimum: usize,
+    maximum: usize,
+    field: &str,
+) -> Result<(), String> {
     if value.len() < minimum
         || value.len() > maximum
         || value.iter().any(|byte| byte.is_ascii_control())
@@ -912,7 +908,10 @@ mod tests {
     #[test]
     fn strict_response_headers_reject_redirects_and_oversized_lengths() {
         let mut headers = HeaderMap::new();
-        headers.insert(CONTENT_TYPE, "application/json; charset=utf-8".parse().unwrap());
+        headers.insert(
+            CONTENT_TYPE,
+            "application/json; charset=utf-8".parse().unwrap(),
+        );
         headers.insert(CONTENT_LENGTH, "2".parse().unwrap());
         assert!(validate_success_response_headers(StatusCode::OK, &headers).is_ok());
         assert!(validate_success_response_headers(StatusCode::FOUND, &headers).is_err());

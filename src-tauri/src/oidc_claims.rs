@@ -191,7 +191,8 @@ fn decode_payload(id_token: &[u8]) -> Result<SecretBytes, &'static str> {
     let header = segments.next().ok_or("segment_count_invalid")?;
     let payload = segments.next().ok_or("segment_count_invalid")?;
     let signature = segments.next().ok_or("segment_count_invalid")?;
-    if segments.next().is_some() || header.is_empty() || payload.is_empty() || signature.is_empty() {
+    if segments.next().is_some() || header.is_empty() || payload.is_empty() || signature.is_empty()
+    {
         return Err("segment_count_invalid");
     }
     if payload.len() > MAX_PAYLOAD_SEGMENT_BYTES
@@ -254,9 +255,7 @@ fn validate_timestamps(raw: &RawIdTokenClaims, now: i64) -> Result<(), &'static 
     if raw.exp <= 0 || raw.iat <= 0 || raw.auth_time <= 0 {
         return Err("timestamp_nonpositive");
     }
-    if raw.exp <= raw.iat
-        || raw.exp.saturating_sub(raw.iat) > MAX_ID_TOKEN_LIFETIME_SECONDS
-    {
+    if raw.exp <= raw.iat || raw.exp.saturating_sub(raw.iat) > MAX_ID_TOKEN_LIFETIME_SECONDS {
         return Err("lifetime_invalid");
     }
     if raw.exp <= now.saturating_sub(CLOCK_SKEW_SECONDS) {

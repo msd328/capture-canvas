@@ -321,11 +321,7 @@ impl OidcCallbackRuntime {
             pending,
             code_received: state.stage == CallbackStage::CodeReceived,
             provider_error: state.stage == CallbackStage::ProviderError,
-            expires_at: if pending {
-                state.last_expires_at
-            } else {
-                None
-            },
+            expires_at: if pending { state.last_expires_at } else { None },
         }
     }
 
@@ -559,7 +555,9 @@ mod tests {
 
         assert!(matches!(
             runtime.take_exchange_grant(&store),
-            Err(ExchangeGrantTakeError::Auth(OidcConsumeError::StateMismatch))
+            Err(ExchangeGrantTakeError::Auth(
+                OidcConsumeError::StateMismatch
+            ))
         ));
         assert_eq!(runtime.status().stage, "failed");
         assert!(!runtime.status().code_received);

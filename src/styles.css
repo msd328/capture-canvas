@@ -98,10 +98,10 @@
   --background: oklch(0.16 0.01 260);
   --foreground: oklch(0.96 0.005 250);
 
-  --surface: oklch(0.20 0.012 260);
+  --surface: oklch(0.2 0.012 260);
   --surface-elevated: oklch(0.235 0.014 260);
 
-  --card: oklch(0.20 0.012 260);
+  --card: oklch(0.2 0.012 260);
   --card-foreground: oklch(0.96 0.005 250);
   --popover: oklch(0.22 0.014 260);
   --popover-foreground: oklch(0.96 0.005 250);
@@ -166,6 +166,11 @@
 }
 
 @keyframes rec-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
 }

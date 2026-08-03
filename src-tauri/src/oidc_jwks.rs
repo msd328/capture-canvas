@@ -281,9 +281,7 @@ fn validate_json_response_headers(
     if content_types.next().is_some() {
         return Err("content_type_multiple");
     }
-    let content_type = content_type
-        .to_str()
-        .map_err(|_| "content_type_invalid")?;
+    let content_type = content_type.to_str().map_err(|_| "content_type_invalid")?;
     let mut parts = content_type.split(';');
     if !parts
         .next()
@@ -321,9 +319,7 @@ fn validate_json_response_headers(
         if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err("content_length_invalid");
         }
-        if value
-            .parse::<u64>()
-            .map_err(|_| "content_length_invalid")?
+        if value.parse::<u64>().map_err(|_| "content_length_invalid")?
             > MAX_JWKS_RESPONSE_BYTES as u64
         {
             return Err("content_length_too_large");
@@ -576,7 +572,11 @@ mod tests {
 
     #[test]
     fn strict_jwks_accepts_bounded_rsa_and_p256_keys() {
-        let document = format!(r#"{{"keys":[{},{}]}}"#, rsa_key("rsa-key"), ec_key("ec-key"));
+        let document = format!(
+            r#"{{"keys":[{},{}]}}"#,
+            rsa_key("rsa-key"),
+            ec_key("ec-key")
+        );
         let keys = parse_jwks(document.as_bytes()).expect("valid JWKS should parse");
         assert_eq!(keys.len(), 2);
         assert_eq!(keys[0].algorithm(), ApprovedIdTokenAlgorithm::Rs256);
@@ -595,10 +595,7 @@ mod tests {
 
     #[test]
     fn unknown_fields_and_mixed_key_parameters_are_rejected() {
-        let unknown = format!(
-            r#"{{"keys":[{}],"unexpected":true}}"#,
-            rsa_key("rsa-key")
-        );
+        let unknown = format!(r#"{{"keys":[{}],"unexpected":true}}"#, rsa_key("rsa-key"));
         assert_eq!(parse_jwks(unknown.as_bytes()), Err("json_invalid"));
 
         let mixed = rsa_key("rsa-key").replace("\"crv\":null", "\"crv\":\"P-256\"");
@@ -608,7 +605,11 @@ mod tests {
 
     #[test]
     fn strict_header_selects_only_exact_kid_and_algorithm() {
-        let document = format!(r#"{{"keys":[{},{}]}}"#, rsa_key("rsa-key"), ec_key("ec-key"));
+        let document = format!(
+            r#"{{"keys":[{},{}]}}"#,
+            rsa_key("rsa-key"),
+            ec_key("ec-key")
+        );
         let keys = parse_jwks(document.as_bytes()).expect("valid JWKS should parse");
 
         let rsa_header = parse_id_token_header(&id_token("RS256", "rsa-key"))
@@ -627,17 +628,15 @@ mod tests {
 
     #[test]
     fn duplicate_or_extended_jwt_headers_are_rejected() {
-        let duplicate = URL_SAFE_NO_PAD.encode(
-            br#"{"alg":"RS256","alg":"ES256","kid":"key","typ":"JWT"}"#,
-        );
+        let duplicate =
+            URL_SAFE_NO_PAD.encode(br#"{"alg":"RS256","alg":"ES256","kid":"key","typ":"JWT"}"#);
         assert_eq!(
             parse_id_token_header(format!("{duplicate}.e30.c2ln").as_bytes()),
             Err("header_json_invalid")
         );
 
-        let extended = URL_SAFE_NO_PAD.encode(
-            br#"{"alg":"RS256","kid":"key","typ":"JWT","jku":"https://evil.test"}"#,
-        );
+        let extended = URL_SAFE_NO_PAD
+            .encode(br#"{"alg":"RS256","kid":"key","typ":"JWT","jku":"https://evil.test"}"#);
         assert_eq!(
             parse_id_token_header(format!("{extended}.e30.c2ln").as_bytes()),
             Err("header_json_invalid")

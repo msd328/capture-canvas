@@ -45,8 +45,9 @@ function SettingsPage() {
   const [authStatusError, setAuthStatusError] = useState(false);
   const [oidcClientStatus, setOidcClientStatus] = useState<OidcClientStatus | null>(null);
   const [oidcClientError, setOidcClientError] = useState(false);
-  const [oidcExchangeStatus, setOidcExchangeStatus] =
-    useState<OidcExchangeContractStatus | null>(null);
+  const [oidcExchangeStatus, setOidcExchangeStatus] = useState<OidcExchangeContractStatus | null>(
+    null,
+  );
   const [oidcExchangeError, setOidcExchangeError] = useState(false);
   const [oidcCallbackStatus, setOidcCallbackStatus] = useState<OidcCallbackStatus | null>(null);
   const [saving, setSaving] = useState(false);
@@ -315,8 +316,7 @@ function SettingsPage() {
         : "Token exchange provider not configured";
   const exchangeStatusDescription = oidcExchangeError
     ? "Recorder will not process provider tokens until the native contract can be checked."
-    : oidcExchangeStatus?.strictResponseParser &&
-        oidcExchangeStatus.boundedHttpsTransportSupported
+    : oidcExchangeStatus?.strictResponseParser && oidcExchangeStatus.boundedHttpsTransportSupported
       ? `Public-client encoding, strict bounded JSON parsing, and a ${oidcExchangeStatus.totalTimeoutSeconds}-second HTTPS transport are ready. Live exchange remains disabled until signed identity validation is enabled.`
       : "Native token response validation or bounded HTTPS transport is unavailable.";
   const callbackStatusText = describeCallbackStatus(oidcCallbackStatus);

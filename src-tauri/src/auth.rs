@@ -765,7 +765,10 @@ mod tests {
         let consumed = state
             .consume_oidc_state(preparation.state.as_bytes(), now)
             .expect("matching state should consume the transaction");
-        assert!(constant_time_eq(consumed.nonce(), preparation.nonce.as_bytes()));
+        assert!(constant_time_eq(
+            consumed.nonce(),
+            preparation.nonce.as_bytes()
+        ));
         assert_eq!(
             pkce_s256_challenge(consumed.code_verifier()),
             preparation.code_challenge
@@ -787,7 +790,9 @@ mod tests {
             Err(OidcConsumeError::StateMismatch)
         ));
         assert!(state.oidc_status(now).pending);
-        assert!(state.consume_oidc_state(preparation.state.as_bytes(), now).is_ok());
+        assert!(state
+            .consume_oidc_state(preparation.state.as_bytes(), now)
+            .is_ok());
     }
 
     #[test]
