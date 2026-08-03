@@ -41,6 +41,24 @@ pub struct OidcCallbackStatus {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+#[allow(dead_code)]
+pub(crate) struct NativeOidcExchangeGrant(runtime::NativeOidcExchangeGrant);
+
+#[allow(dead_code)]
+impl NativeOidcExchangeGrant {
+    pub(crate) fn authorization_code(&self) -> &[u8] {
+        self.0.authorization_code()
+    }
+
+    pub(crate) fn nonce(&self) -> &[u8] {
+        self.0.nonce()
+    }
+
+    pub(crate) fn code_verifier(&self) -> &[u8] {
+        self.0.code_verifier()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct LoopbackEndpoint {
     pub address: SocketAddr,
@@ -115,6 +133,15 @@ pub fn cancel_callback() -> bool {
         "[Recorder][AuthHealth] stage=oidc_callback_cancel ok=true had_pending={had_pending}"
     );
     had_pending
+}
+
+#[allow(dead_code)]
+pub(crate) fn take_exchange_grant(
+    store: &SecureAuthStore,
+) -> Result<NativeOidcExchangeGrant, String> {
+    runtime::take_exchange_grant(store)
+        .map(NativeOidcExchangeGrant)
+        .map_err(|_| "OIDC exchange authorization material is unavailable".to_string())
 }
 
 fn configured_loopback_endpoint() -> Result<LoopbackEndpoint, String> {
