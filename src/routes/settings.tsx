@@ -3,7 +3,12 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import * as desktop from "@/services/desktop";
 import type { CameraInfo, MicrophoneInfo, RecorderSettings } from "@/types/recorder";
-import type { OidcCallbackStatus, OidcClientStatus, SecureAuthStatus } from "@/types/saas";
+import type {
+  OidcCallbackStatus,
+  OidcClientStatus,
+  OidcExchangeContractStatus,
+  SecureAuthStatus,
+} from "@/types/saas";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -40,6 +45,9 @@ function SettingsPage() {
   const [authStatusError, setAuthStatusError] = useState(false);
   const [oidcClientStatus, setOidcClientStatus] = useState<OidcClientStatus | null>(null);
   const [oidcClientError, setOidcClientError] = useState(false);
+  const [oidcExchangeStatus, setOidcExchangeStatus] =
+    useState<OidcExchangeContractStatus | null>(null);
+  const [oidcExchangeError, setOidcExchangeError] = useState(false);
   const [oidcCallbackStatus, setOidcCallbackStatus] = useState<OidcCallbackStatus | null>(null);
   const [saving, setSaving] = useState(false);
   const [checkingSecureStore, setCheckingSecureStore] = useState(false);
@@ -84,6 +92,18 @@ function SettingsPage() {
       () => {
         if (cancelled) return;
         setOidcClientError(true);
+      },
+    );
+
+    void desktop.getOidcExchangeContractStatus().then(
+      (status) => {
+        if (cancelled) return;
+        setOidcExchangeStatus(status);
+        setOidcExchangeError(false);
+      },
+      () => {
+        if (cancelled) return;
+        setOidcExchangeError(true);
       },
     );
 
@@ -160,15 +180,25 @@ function SettingsPage() {
   const checkSignInSecurity = async () => {
     setCheckingSignInSecurity(true);
     try {
-      const probe = await desktop.probeOidcTransaction();
+      const [transaction, exchange] = await Promise.all([
+        desktop.probeOidcTransaction(),
+        desktop.probeOidcExchangeContract(),
+      ]);
       const passed =
-        probe.s256Ready &&
-        probe.stateRoundTripOk &&
-        probe.nonceRetained &&
-        probe.replayRejected &&
-        probe.verifierKeptNative;
+        transaction.s256Ready &&
+        transaction.stateRoundTripOk &&
+        transaction.nonceRetained &&
+        transaction.replayRejected &&
+        transaction.verifierKeptNative &&
+        exchange.authorizationCodeFormOk &&
+        exchange.refreshTokenFormOk &&
+        exchange.tokenResponseOk &&
+        exchange.duplicateFieldRejected &&
+        exchange.unknownFieldRejected &&
+        exchange.oversizedResponseRejected &&
+        exchange.secretsKeptNative;
       if (passed) {
-        toast.success("Local PKCE and one-time sign-in state checks passed");
+        toast.success("PKCE, one-time state, and token exchange contract checks passed");
       } else {
         toast.error("Sign-in security checks did not pass");
       }
@@ -182,18 +212,24 @@ function SettingsPage() {
   const checkProviderConfiguration = async () => {
     setCheckingProviderConfiguration(true);
     try {
-      const status = await desktop.getOidcClientStatus();
+      const [status, exchangeStatus] = await Promise.all([
+        desktop.getOidcClientStatus(),
+        desktop.getOidcExchangeContractStatus(),
+      ]);
       setOidcClientStatus(status);
       setOidcClientError(false);
-      if (status.configured) {
+      setOidcExchangeStatus(exchangeStatus);
+      setOidcExchangeError(false);
+      if (status.configured && exchangeStatus.configured) {
         toast.success(
           `Pinned OIDC configuration is ready (${status.callbackMode}, ${status.scopeCount} scopes)`,
         );
       } else {
-        toast.info("No OIDC provider is pinned into this build yet");
+        toast.info("No complete OIDC provider contract is pinned into this build yet");
       }
     } catch (error) {
       setOidcClientError(true);
+      setOidcExchangeError(true);
       toast.error(error instanceof Error ? error.message : "Provider configuration check failed");
     } finally {
       setCheckingProviderConfiguration(false);
@@ -266,9 +302,22 @@ function SettingsPage() {
     : oidcClientStatus?.configured
       ? `HTTPS authorization endpoint, ${oidcClientStatus.callbackMode} callback, and ${oidcClientStatus.scopeCount} scopes are fixed at build time.`
       : "This build cannot prepare a cloud sign-in request.";
+  const exchangeStatusTitle = oidcExchangeError
+    ? "Token exchange contract is unavailable"
+    : oidcExchangeStatus === null
+      ? "Checking token exchange contract…"
+      : oidcExchangeStatus.configured
+        ? "Native token exchange contract ready"
+        : "Token exchange provider not configured";
+  const exchangeStatusDescription = oidcExchangeError
+    ? "Recorder will not process provider tokens until the native contract can be checked."
+    : oidcExchangeStatus?.strictResponseParser
+      ? "Public-client request encoding and strict bounded response parsing are available. Network exchange and signed identity validation remain disabled."
+      : "Native token response validation is unavailable.";
   const callbackStatusText = describeCallbackStatus(oidcCallbackStatus);
   const canStartCloudSignIn =
     oidcClientStatus?.configured === true &&
+    oidcExchangeStatus?.configured === true &&
     oidcClientStatus.callbackMode === "loopback" &&
     authStatus?.supported === true &&
     authStatus.signedIn === false &&
@@ -380,6 +429,10 @@ function SettingsPage() {
               <div className="font-medium text-foreground">{oidcStatusTitle}</div>
               <div className="mt-1 text-muted-foreground">{oidcStatusDescription}</div>
             </div>
+            <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs">
+              <div className="font-medium text-foreground">{exchangeStatusTitle}</div>
+              <div className="mt-1 text-muted-foreground">{exchangeStatusDescription}</div>
+            </div>
             {callbackStatusText ? (
               <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs">
                 <div className="font-medium text-foreground">{callbackStatusText.title}</div>
@@ -388,9 +441,9 @@ function SettingsPage() {
             ) : null}
             <p className="text-xs text-muted-foreground">
               Provider metadata is accepted only from compile-time settings. A configured numeric
-              loopback callback can open the system browser and receive one bounded response.
-              Authorization-code exchange and account creation remain disabled until signed-token
-              validation is implemented.
+              loopback callback can open the system browser and receive one bounded response. Native
+              request encoding and token-response parsing are implemented, but code/verifier
+              handoff, HTTPS exchange, signed-token validation, and account creation remain disabled.
             </p>
             <div className="flex flex-wrap justify-end gap-2">
               {authStatus?.signedIn ? (
@@ -478,7 +531,7 @@ function describeCallbackStatus(
       return {
         title: "Authorization response captured",
         description:
-          "The one-time code is held only in native memory. Token exchange is not enabled yet.",
+          "The one-time code is held only in native memory. Native code/verifier handoff is not enabled yet.",
       };
     case "providerError":
       return {
