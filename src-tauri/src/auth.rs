@@ -249,10 +249,7 @@ impl SecureAuthStore {
         #[cfg(windows)]
         {
             let probe = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
-            windows_store::write_secret(
-                windows_store::CredentialTarget::Probe,
-                probe.as_bytes(),
-            )?;
+            windows_store::write_secret(windows_store::CredentialTarget::Probe, probe.as_bytes())?;
 
             let read_result = windows_store::read_secret(windows_store::CredentialTarget::Probe);
             let delete_result =
@@ -328,9 +325,7 @@ impl SecureAuthStore {
     pub fn cancel_oidc_transaction(&self) {
         let mut state = self.state.lock();
         let had_pending = state.cancel_oidc_transaction();
-        eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_cancel ok=true had_pending={had_pending}"
-        );
+        eprintln!("[Recorder][AuthHealth] stage=oidc_cancel ok=true had_pending={had_pending}");
     }
 
     /// Exercise the PKCE/state lifecycle without contacting an identity provider
@@ -608,9 +603,7 @@ mod windows_store {
 
     fn operation_error(stage: &str, error: &windows::core::Error) -> String {
         let code = error_code(error);
-        eprintln!(
-            "[Recorder][AuthHealth] stage={stage} ok=false supported=true code={code}"
-        );
+        eprintln!("[Recorder][AuthHealth] stage={stage} ok=false supported=true code={code}");
         format!("Windows secure-store operation failed at {stage} (code {code})")
     }
 
@@ -637,8 +630,7 @@ mod windows_store {
             UserName: PWSTR::default(),
         };
 
-        unsafe { CredWriteW(&credential, 0) }
-            .map_err(|error| operation_error("write", &error))
+        unsafe { CredWriteW(&credential, 0) }.map_err(|error| operation_error("write", &error))
     }
 
     pub fn read_secret(target: CredentialTarget) -> Result<Option<Vec<u8>>, String> {
@@ -677,21 +669,14 @@ mod windows_store {
         }
 
         let secret = unsafe {
-            std::slice::from_raw_parts(credential.CredentialBlob as *const u8, secret_len)
-                .to_vec()
+            std::slice::from_raw_parts(credential.CredentialBlob as *const u8, secret_len).to_vec()
         };
         Ok(Some(secret))
     }
 
     pub fn delete_secret(target: CredentialTarget) -> Result<(), String> {
         let target_name = wide_null(target.value());
-        match unsafe {
-            CredDeleteW(
-                PCWSTR(target_name.as_ptr()),
-                CRED_TYPE_GENERIC,
-                None,
-            )
-        } {
+        match unsafe { CredDeleteW(PCWSTR(target_name.as_ptr()), CRED_TYPE_GENERIC, None) } {
             Ok(()) => Ok(()),
             Err(error) if error.code() == HRESULT_NOT_FOUND => Ok(()),
             Err(error) => Err(operation_error("delete", &error)),
@@ -762,9 +747,7 @@ mod tests {
             Err(OidcConsumeError::StateMismatch)
         ));
         assert!(state.oidc_status(now).pending);
-        assert!(state
-            .consume_oidc_state(&preparation.state, now)
-            .is_ok());
+        assert!(state.consume_oidc_state(&preparation.state, now).is_ok());
     }
 
     #[test]
