@@ -18,9 +18,7 @@ pub(super) fn open(url: &str) -> Result<(), String> {
     };
     let code = result.0 as isize;
     if code <= 32 {
-        eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_browser_launch ok=false code={code}"
-        );
+        eprintln!("[Recorder][AuthHealth] stage=oidc_browser_launch ok=false code={code}");
         return Err("Windows could not open the configured identity provider".to_string());
     }
     Ok(())
