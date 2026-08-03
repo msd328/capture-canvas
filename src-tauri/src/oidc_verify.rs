@@ -78,10 +78,7 @@ fn promote_claims(claims: UnverifiedIdTokenClaims) -> VerifiedNativeIdentity {
     }
 }
 
-fn verify_signature_with_key(
-    id_token: &[u8],
-    key: &ValidatedJwk,
-) -> Result<(), &'static str> {
+fn verify_signature_with_key(id_token: &[u8], key: &ValidatedJwk) -> Result<(), &'static str> {
     let (signing_input, signature_bytes) = split_compact_signature(id_token)?;
     match key {
         ValidatedJwk::Rsa {
@@ -176,7 +173,8 @@ mod tests {
     const ES_SIGNING_INPUT: &str = "eyJhbGciOiJFUzI1NiIsImtpZCI6ImVjLXRlc3QiLCJ0eXAiOiJKV1QifQ.eyJzdWIiOiIxMTExMTExMS0xMTExLTQxMTEtODExMS0xMTExMTExMTExMTEifQ";
     const ES_X: &str = "kt5PQFpkkoXsOwE6zgA79hbZpTgFywqZcnF2FSKjA5Y";
     const ES_Y: &str = "V6Hk-QUKm3lG6ERolavWzbtC3gdQ9jjgeys9Pc8rYiU";
-    const ES_SIGNATURE: &str = "GwCP0ZUh2jmC876Yz_eVg6ZEOFXibi-DnaGT3kHEkqgAv702PKEGae89s-QESK5H3pbJsNdAXRWQgfx1f-4WGw";
+    const ES_SIGNATURE: &str =
+        "GwCP0ZUh2jmC876Yz_eVg6ZEOFXibi-DnaGT3kHEkqgAv702PKEGae89s-QESK5H3pbJsNdAXRWQgfx1f-4WGw";
 
     fn compact(input: &str, signature: &str) -> Vec<u8> {
         format!("{input}.{signature}").into_bytes()

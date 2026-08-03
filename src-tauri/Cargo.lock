@@ -2842,6 +2842,7 @@ dependencies = [
  "hound",
  "parking_lot",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "tauri",
