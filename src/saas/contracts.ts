@@ -9,9 +9,10 @@ export type RecordingVisibility = z.infer<typeof RecordingVisibilitySchema>;
 
 const IdSchema = z.string().uuid();
 const IsoDateTimeSchema = z.string().datetime({ offset: true });
-const Sha256Schema = z
-  .string()
-  .regex(/^[a-f0-9]{64}$/, "Expected a lowercase SHA-256 hex digest");
+const Sha256Schema = z.string().regex(
+  /^[a-f0-9]{64}$/,
+  "Expected a lowercase SHA-256 hex digest",
+);
 
 const opaqueProtocolValue = (field: string, minimum: number, maximum: number) =>
   z
@@ -54,7 +55,11 @@ export const CloudRecordingSchema = z
     title: z.string().trim().min(1).max(200),
     visibility: RecordingVisibilitySchema,
     status: z.enum(["uploading", "ready", "failed", "deleted"]),
-    durationMs: z.number().int().nonnegative().max(24 * 60 * 60 * 1_000),
+    durationMs: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(24 * 60 * 60 * 1_000),
     fileSizeBytes: z.number().int().positive().max(MAX_RECORDING_UPLOAD_BYTES),
     contentType: z.literal("video/mp4"),
     createdAt: IsoDateTimeSchema,
@@ -71,7 +76,11 @@ export const CreateUploadSessionRequestSchema = z
     title: z.string().trim().min(1).max(200),
     contentType: z.literal("video/mp4"),
     fileSizeBytes: z.number().int().positive().max(MAX_RECORDING_UPLOAD_BYTES),
-    durationMs: z.number().int().nonnegative().max(24 * 60 * 60 * 1_000),
+    durationMs: z
+      .number()
+      .int()
+      .nonnegative()
+      .max(24 * 60 * 60 * 1_000),
     sha256: Sha256Schema,
     visibility: RecordingVisibilitySchema.default("private"),
   })
