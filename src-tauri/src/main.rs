@@ -54,6 +54,8 @@ fn main() {
             commands::auth::get_oidc_exchange_contract_status,
             commands::auth::start_oidc_sign_in,
             commands::auth::get_oidc_callback_status,
+            commands::auth::complete_oidc_sign_in,
+            commands::auth::get_oidc_session_status,
             commands::auth::cancel_oidc_transaction,
             commands::auth::probe_oidc_transaction,
             commands::auth::probe_oidc_exchange_contract,
