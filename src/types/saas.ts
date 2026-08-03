@@ -28,10 +28,16 @@ export interface OidcExchangeContractStatus {
   authorizationCodeFormSupported: boolean;
   refreshTokenFormSupported: boolean;
   strictResponseParser: boolean;
+  boundedHttpsTransportSupported: boolean;
+  redirectsDisabled: boolean;
+  runtimeProxyDisabled: boolean;
   networkExchangeEnabled: boolean;
   identityValidationEnabled: boolean;
   maxRequestBytes: number;
   maxResponseBytes: number;
+  connectTimeoutSeconds: number;
+  readTimeoutSeconds: number;
+  totalTimeoutSeconds: number;
 }
 
 export interface OidcExchangeProbe {
@@ -41,6 +47,10 @@ export interface OidcExchangeProbe {
   duplicateFieldRejected: boolean;
   unknownFieldRejected: boolean;
   oversizedResponseRejected: boolean;
+  transportClientOk: boolean;
+  strictJsonHeadersOk: boolean;
+  redirectResponseRejected: boolean;
+  oversizedDeclaredResponseRejected: boolean;
   secretsKeptNative: boolean;
 }
 
@@ -54,6 +64,7 @@ export type OidcCallbackStage =
   | "idle"
   | "waiting"
   | "codeReceived"
+  | "grantTaken"
   | "providerError"
   | "timedOut"
   | "cancelled"
