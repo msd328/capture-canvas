@@ -162,9 +162,7 @@ impl OidcCallbackRuntime {
         Ok(())
     }
 
-    fn take_authorization_grant(
-        &self,
-    ) -> Result<NativeAuthorizationGrant, GrantTakeError> {
+    fn take_authorization_grant(&self) -> Result<NativeAuthorizationGrant, GrantTakeError> {
         let mut state = self.state.lock();
         let now = Instant::now();
         if state
@@ -356,8 +354,7 @@ pub(super) fn accept_code(
 }
 
 #[allow(dead_code)]
-pub(super) fn take_authorization_grant(
-) -> Result<NativeAuthorizationGrant, GrantTakeError> {
+pub(super) fn take_authorization_grant() -> Result<NativeAuthorizationGrant, GrantTakeError> {
     let result = instance().take_authorization_grant();
     match result {
         Ok(grant) => {
