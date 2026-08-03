@@ -22,9 +22,9 @@ Every implementation update must also include the security-impact block defined 
 
 ## Current focus
 
-1. Pull the latest native-auth and verified Supabase access batches, run `scripts/windows-local-check.ps1` and `scripts/supabase-local-check.ps1`, and resolve any TypeScript, Rust, migration, RLS, RPC, WebCrypto, grant or pgTAP failures.
+1. Generate, review and commit the Rust `Cargo.lock`, then pull the latest native-auth and verified Supabase access batches, run `scripts/windows-local-check.ps1` and `scripts/supabase-local-check.ps1`, and resolve any TypeScript, Rust, migration, RLS, RPC, WebCrypto, grant, dependency-lock or pgTAP failures.
 2. Create and document separate Supabase development, staging and production projects; link only the intended environment and validate the committed migrations against development before any remote staging/production push.
-3. Use the bounded private HTTPS token transport to implement strict JWKS-backed ID-token algorithm/signature/issuer/audience/expiry/nonce validation, then enable live exchange, refresh rotation, logout and revocation.
+3. Use the bounded pinned JWKS resolver and exact `kid`/algorithm selection to implement maintained RS256/ES256 signature verification plus strict issuer/audience/subject/time/nonce validation, then enable live exchange, refresh rotation, logout and revocation.
 4. Validate a real Supabase OAuth access token against `GET /api/v1/me/access`, including JWKS rotation, timeout, disabled/expired entitlement and cross-user rejection evidence.
 5. Implement verified-webhook provisioning of `desktop_full_access`, desktop AuthGate, payment selection, payment-pending flow and native Rust entitlement enforcement.
 6. Implement the common billing-provider interface and Stripe Checkout/subscriptions first, including signature-verified idempotent webhooks and Customer Portal management.
@@ -166,7 +166,7 @@ Every implementation update must also include the security-impact block defined 
 | HLT-27 | 🟡 | Native OIDC transaction lifecycle and one-time PKCE/nonce take health | Secret-free prepare/status/cancel/probe plus `oidc_pkce_take` diagnostics report expiry, S256 readiness, state matching, nonce retention, replay rejection and typed missing/expired/mismatch outcomes; coordinated unit tests added and Windows runtime evidence pending |
 | HLT-28 | 🟡 | Pinned OIDC client configuration and authorization preparation health | `AuthHealth` reports configured/unconfigured state, fixed callback mode, scope count, URL size and native-verifier handling without endpoint, client ID, state, nonce, challenge or URL values; Windows validation pending |
 | HLT-29 | 🟡 | Native OIDC browser, callback and coordinated exchange-grant handoff health | Path/token-free stages report bind, listen, callback validation, code expiry and combined callback/PKCE take success or typed missing/expired/mismatch failure; both native owners clear on failure, unit coverage is added and configured Windows validation remains pending |
-| HLT-30 | 🟡 | Pinned OIDC token endpoint, issuer, audience, JWKS and bounded transport readiness health | `AuthHealth` reports only configured booleans, deadlines and typed failures for the Rustls client, disabled redirects/retries/runtime proxies, strict status/media type/content encoding and declared/actual size limits; endpoint/audience/token values remain native and Windows/configured-provider validation is pending |
+| HLT-30 | 🟡 | Pinned OIDC token endpoint, issuer, audience, bounded transport and JWKS-resolution health | `AuthHealth` reports only configured booleans, deadlines, cache hit/refresh, key counts, approved algorithm and typed failures for the bounded token/JWKS clients, strict response framing, duplicate/unknown key rejection and exact `kid`/algorithm selection; endpoint, key identifiers and token values remain native and Windows/configured-provider validation is pending |
 | HLT-31 | 🟡 | Verified SaaS access-token and entitlement-read health | `SaasHealth` reports only stage, typed result, full-access boolean and entitlement count; frontend build, real JWT/JWKS rotation, RPC timeout and Supabase runtime evidence remain pending |
 
 ## Recording library
@@ -204,7 +204,7 @@ Every implementation update must also include the security-impact block defined 
 | REL-11 | 🔵 | Crash-recovery metadata | Active session journal |
 | REL-12 | ⚪ | Recover playable output after crash | Recovery workflow |
 | REL-13 | ⚪ | Diagnostic log rotation | Bounded log storage |
-| REL-14 | 🟡 | Windows CI build/test gate | Complete Windows local validation passed on 2026-07-31 through frozen Bun install, lint, production frontend build, Rust formatting, tests and Windows cargo check; first green hosted run remains pending |
+| REL-14 | 🟡 | Windows CI build/test gate | Complete Windows local validation passed on 2026-07-31 through frozen Bun install, lint, production frontend build, Rust formatting, tests and Windows cargo check; the repository currently lacks the committed Rust `Cargo.lock` required for a reproducible clean-checkout `--locked` run, and the first green hosted run remains pending |
 
 ## Desktop UX
 
@@ -268,10 +268,10 @@ The detailed policy, trust boundaries, current data inventory, and mandatory sta
 | SEC-06 | 🟡 | Comprehensive Rust command-input validation and limits | UUID, title, FPS, device ID, output-path and settings validation added; dimensions/crops/source IDs/negative test suite remain |
 | SEC-07 | 🔵 | Remove or authenticate external executable discovery | Production never executes an unverified PATH/environment-selected FFmpeg binary |
 | SEC-08 | 🟡 | Structured diagnostic-log privacy and redaction | `FallbackHealth` and `FinalizationHealth` add only stage, timing, counts, process outcome and file-size fields; free-form backend errors and exported reports still require review |
-| SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot, Windows CI, stable line-ending policy and a successful complete Windows local validation cycle are present; first green hosted dependency/CI cycle remains pending |
+| SEC-09 | 🟡 | Automated dependency monitoring and vulnerability review | Weekly npm/Cargo Dependabot, Windows CI and stable line-ending policy are present; a committed Rust lockfile, clean-checkout locked validation and the first green hosted dependency/CI cycle remain pending |
 | SEC-10 | 🔵 | Secret scanning and repository protection | Secret scanning enabled; test secret is blocked or detected without entering history |
 | SEC-11 | ⚪ | Signed executable, installer, updater, and update metadata | Signature verification passes on a clean machine |
-| SEC-12 | 🟡 | OS secure storage for future account tokens | Windows Credential Manager readiness/status/clear is present; the state-bound callback code/PKCE/nonce handoff and bounded unverified token response remain native-only, non-serializable and unpersisted; live exchange stays gated on strict ID-token validation, and Windows validation, refresh-token write/rotation and macOS Keychain support remain |
+| SEC-12 | 🟡 | OS secure storage for future account tokens | Windows Credential Manager readiness/status/clear is present; the state-bound callback code/PKCE/nonce handoff, bounded unverified token response, pinned JWKS cache and exact RS256/ES256 `kid`/algorithm selection remain native-only, non-serializable and unpersisted; live exchange stays gated on cryptographic signature and claim validation, and Windows validation, refresh-token write/rotation and macOS Keychain support remain |
 | SEC-13 | 🟡 | SaaS authentication, object authorisation, tenancy, and rate-limit tests | Pinned asymmetric JWKS verification, issuer/audience/client-ID/time checks, owner-derived parameterless access RPC and cross-user/expired/disabled pgTAP tests are implemented; real-token runtime, upload object authorization and rate limits remain |
 | SEC-14 | ⚪ | Optional encrypted local recording storage | Keys are protected by the OS and recovery/deletion behaviour is documented |
 | SEC-15 | ⚪ | Independent penetration test and remediation verification | High/critical findings resolved before public release |
@@ -291,7 +291,7 @@ is `docs/status/2026-08-03-saas-paid-access-architecture.md`.
 
 | ID | Status | Work |
 |---|---:|---|
-| SAAS-01 | 🟡 | Native state/nonce/PKCE, pinned authorization/token trust metadata, browser/loopback capture, strict bounded exchange contracts, coordinated one-time code/PKCE/nonce handoff and a private bounded Rustls token transport with strict response framing are implemented; Supabase provider registration, live exchange, JWKS-backed ID-token validation and session creation remain |
+| SAAS-01 | 🟡 | Native state/nonce/PKCE, pinned authorization/token/JWKS trust metadata, browser/loopback capture, strict bounded exchange contracts, coordinated one-time code/PKCE/nonce handoff, private bounded Rustls token transport, five-minute JWKS cache, forced key-rotation refresh, strict RS256/ES256 key parsing and exact ID-token `kid`/algorithm selection are implemented; Supabase provider registration, live exchange, signature/claim validation and session creation remain |
 | SAAS-02 | 🟡 | Windows Credential Manager readiness/status/clear plus a transient native-only PKCE verifier boundary and failure-isolated Settings checks are implemented; Windows validation and real refresh-token write/rotation remain |
 | SAAS-03 | 🟡 | Resumable uploads | Upload-session metadata is limited to 64 KiB, must arrive within ten seconds, uses strict UTF-8/JSON/Zod validation and still fails closed; authenticated object-storage adapter pending |
 | SAAS-04 | 🔵 | Upload progress/retry |
@@ -561,3 +561,4 @@ The desktop recorder is not production-ready until all of the following pass:
 | 2026-08-03 | `217971b..a3df04a` | Added one-time native callback-grant take, `grantTaken` lifecycle, replay rejection, expiry handling, secret-free health and unit coverage; SAAS-01, SEC-12 and HLT-29 remain 🟡 pending coordinated PKCE handoff and Windows validation |
 | 2026-08-03 | `741aa0b..97f7bb1` | Added state-bound coordinated callback-code/PKCE/nonce consumption, clear-both failure handling, native-only nonce zeroing, typed diagnostics and unit coverage; SAAS-01, SEC-12 and HLT-27/29 remain 🟡 pending Windows validation and HTTPS exchange |
 | 2026-08-03 | `d821429..d1b325b` | Added a private bounded Rustls token transport with no redirects/retries/runtime proxy, strict response framing, 5/5/12-second deadlines, 64 KiB streaming limit, native-only unverified token ownership and Settings probes; SAAS-01, SEC-12 and HLT-30 remain 🟡 pending Windows validation and JWKS-backed ID-token verification |
+| 2026-08-03 | `76d25ee..d5b8fca` | Added bounded pinned JWKS retrieval, five-minute cache, one forced rotation refresh, strict RS256/ES256 public-key parsing, duplicate-key rejection, strict ID-token header parsing and exact `kid`/algorithm selection; SAAS-01, SEC-12, HLT-30 and REL-14 remain 🟡 pending a committed Cargo lockfile and Windows/configured-provider validation |
