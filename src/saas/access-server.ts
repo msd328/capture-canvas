@@ -4,10 +4,7 @@ import {
   SupabaseAccessRowSchema,
   type MeAccessResponse,
 } from "./access-contracts";
-import {
-  isAccessTokenConfigurationError,
-  verifySupabaseAccessToken,
-} from "./access-token";
+import { isAccessTokenConfigurationError, verifySupabaseAccessToken } from "./access-token";
 import { SAAS_API_VERSION, type SaasApiError } from "./contracts";
 import { requireSupabaseServerConfig } from "./supabase";
 
@@ -64,9 +61,7 @@ function bearerToken(request: Request): string | null {
   if (new TextEncoder().encode(authorization).byteLength > MAX_AUTHORIZATION_HEADER_BYTES) {
     return null;
   }
-  const match = /^Bearer ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/.exec(
-    authorization,
-  );
+  const match = /^Bearer ([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/.exec(authorization);
   return match?.[1] ?? null;
 }
 
@@ -214,11 +209,7 @@ async function handleGetAccess(request: Request, env: unknown): Promise<Response
   } catch (error) {
     if (isAccessTokenConfigurationError(error)) {
       console.error("[Recorder][SaasHealth] stage=me_access ok=false code=not_configured");
-      return errorResponse(
-        503,
-        "not_configured",
-        "SaaS authentication is not configured.",
-      );
+      return errorResponse(503, "not_configured", "SaaS authentication is not configured.");
     }
     console.info("[Recorder][SaasHealth] stage=me_access ok=false code=invalid_token");
     return errorResponse(401, "not_authenticated", "Authentication is required.", {
@@ -256,12 +247,9 @@ export async function handleSaasAccessRequest(
     });
   }
   if (request.method !== "GET") {
-    return errorResponse(
-      405,
-      "method_not_allowed",
-      "Account access must be read with GET.",
-      { allow: "GET, OPTIONS" },
-    );
+    return errorResponse(405, "method_not_allowed", "Account access must be read with GET.", {
+      allow: "GET, OPTIONS",
+    });
   }
   return handleGetAccess(request, env);
 }
