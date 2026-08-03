@@ -9,10 +9,7 @@ export type RecordingVisibility = z.infer<typeof RecordingVisibilitySchema>;
 
 const IdSchema = z.string().uuid();
 const IsoDateTimeSchema = z.string().datetime({ offset: true });
-const Sha256Schema = z.string().regex(
-  /^[a-f0-9]{64}$/,
-  "Expected a lowercase SHA-256 hex digest",
-);
+const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/, "Expected a lowercase SHA-256 hex digest");
 
 const opaqueProtocolValue = (field: string, minimum: number, maximum: number) =>
   z
