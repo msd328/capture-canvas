@@ -11,6 +11,7 @@ enum CallbackStage {
     Idle,
     Waiting,
     CodeReceived,
+    GrantTaken,
     ProviderError,
     TimedOut,
     Cancelled,
@@ -23,6 +24,7 @@ impl CallbackStage {
             Self::Idle => "idle",
             Self::Waiting => "waiting",
             Self::CodeReceived => "codeReceived",
+            Self::GrantTaken => "grantTaken",
             Self::ProviderError => "providerError",
             Self::TimedOut => "timedOut",
             Self::Cancelled => "cancelled",
@@ -58,11 +60,21 @@ struct ActiveCallback {
     expires_at_instant: Instant,
 }
 
-struct NativeAuthorizationGrant {
+pub(super) struct NativeAuthorizationGrant {
     generation: u64,
-    _state: SecretText,
-    _authorization_code: SecretText,
+    state: SecretText,
+    authorization_code: SecretText,
     expires_at_instant: Instant,
+}
+
+impl NativeAuthorizationGrant {
+    pub(super) fn state(&self) -> &[u8] {
+        self.state.as_bytes()
+    }
+
+    pub(super) fn authorization_code(&self) -> &[u8] {
+        self.authorization_code.as_bytes()
+    }
 }
 
 struct CallbackState {
@@ -143,11 +155,36 @@ impl OidcCallbackRuntime {
         state.stage = CallbackStage::CodeReceived;
         state.grant = Some(NativeAuthorizationGrant {
             generation,
-            _state: SecretText::new(supplied_state),
-            _authorization_code: SecretText::new(authorization_code),
+            state: SecretText::new(supplied_state),
+            authorization_code: SecretText::new(authorization_code),
             expires_at_instant: Instant::now() + AUTHORIZATION_CODE_TTL,
         });
         Ok(())
+    }
+
+    fn take_authorization_grant(
+        &self,
+    ) -> Result<NativeAuthorizationGrant, GrantTakeError> {
+        let mut state = self.state.lock();
+        let now = Instant::now();
+        if state
+            .grant
+            .as_ref()
+            .is_some_and(|grant| now >= grant.expires_at_instant)
+        {
+            state.grant = None;
+            state.stage = CallbackStage::TimedOut;
+            return Err(GrantTakeError::Expired);
+        }
+        if state.stage != CallbackStage::CodeReceived {
+            return Err(GrantTakeError::Missing);
+        }
+        let Some(grant) = state.grant.take() else {
+            state.stage = CallbackStage::Failed;
+            return Err(GrantTakeError::Missing);
+        };
+        state.stage = CallbackStage::GrantTaken;
+        Ok(grant)
     }
 
     fn accept_provider_error(
@@ -236,7 +273,7 @@ impl OidcCallbackRuntime {
             code_received: state.stage == CallbackStage::CodeReceived,
             provider_error: state.stage == CallbackStage::ProviderError,
             expires_at: if pending {
-                state.last_expires_at.clone()
+                state.last_expires_at
             } else {
                 None
             },
@@ -270,6 +307,12 @@ impl OidcCallbackRuntime {
 pub(super) enum AcceptError {
     NotActive,
     StateMismatch,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum GrantTakeError {
+    Missing,
+    Expired,
 }
 
 fn instance() -> &'static OidcCallbackRuntime {
@@ -310,6 +353,30 @@ pub(super) fn accept_code(
         }
     }
     result
+}
+
+#[allow(dead_code)]
+pub(super) fn take_authorization_grant(
+) -> Result<NativeAuthorizationGrant, GrantTakeError> {
+    let result = instance().take_authorization_grant();
+    match result {
+        Ok(grant) => {
+            eprintln!(
+                "[Recorder][AuthHealth] stage=oidc_callback_grant_take ok=true replay_rejected=true secrets_kept_native=true"
+            );
+            Ok(grant)
+        }
+        Err(error) => {
+            let code = match error {
+                GrantTakeError::Missing => "missing",
+                GrantTakeError::Expired => "expired",
+            };
+            eprintln!(
+                "[Recorder][AuthHealth] stage=oidc_callback_grant_take ok=false code={code}"
+            );
+            Err(error)
+        }
+    }
 }
 
 pub(super) fn accept_provider_error(
@@ -381,5 +448,33 @@ mod tests {
             Err(AcceptError::NotActive)
         );
         assert!(runtime.status().code_received);
+    }
+
+    #[test]
+    fn authorization_grant_can_be_taken_only_once() {
+        let runtime = OidcCallbackRuntime::new();
+        let generation = runtime.begin(
+            "expected-state".to_string(),
+            Utc::now() + chrono::Duration::minutes(10),
+        );
+        runtime
+            .accept_code(
+                generation,
+                "expected-state".to_string(),
+                "authorization-code".to_string(),
+            )
+            .expect("matching callback should be accepted");
+
+        let grant = runtime
+            .take_authorization_grant()
+            .expect("first grant take should succeed");
+        assert_eq!(grant.state(), b"expected-state");
+        assert_eq!(grant.authorization_code(), b"authorization-code");
+        assert_eq!(
+            runtime.take_authorization_grant(),
+            Err(GrantTakeError::Missing)
+        );
+        assert_eq!(runtime.status().stage, "grantTaken");
+        assert!(!runtime.status().code_received);
     }
 }
