@@ -149,25 +149,28 @@ function SettingsPage() {
     let cancelled = false;
     setCompletingCloudSignIn(true);
 
-    void desktop.completeOidcSignIn().then(
-      async (status) => {
-        if (cancelled) return;
-        setOidcSessionStatus(status);
-        setOidcCallbackStatus(await desktop.getOidcCallbackStatus());
-        toast.success("Provider identity verified for this Recorder session");
-      },
-      async (error) => {
-        if (cancelled) return;
-        setOidcCallbackStatus(await desktop.getOidcCallbackStatus());
-        toast.error(
-          error instanceof Error
-            ? error.message
-            : "Provider identity verification failed. Start sign-in again to retry.",
-        );
-      },
-    ).finally(() => {
-      if (!cancelled) setCompletingCloudSignIn(false);
-    });
+    void desktop
+      .completeOidcSignIn()
+      .then(
+        async (status) => {
+          if (cancelled) return;
+          setOidcSessionStatus(status);
+          setOidcCallbackStatus(await desktop.getOidcCallbackStatus());
+          toast.success("Provider identity verified for this Recorder session");
+        },
+        async (error) => {
+          if (cancelled) return;
+          setOidcCallbackStatus(await desktop.getOidcCallbackStatus());
+          toast.error(
+            error instanceof Error
+              ? error.message
+              : "Provider identity verification failed. Start sign-in again to retry.",
+          );
+        },
+      )
+      .finally(() => {
+        if (!cancelled) setCompletingCloudSignIn(false);
+      });
 
     return () => {
       cancelled = true;

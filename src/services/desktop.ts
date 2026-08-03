@@ -115,8 +115,7 @@ export const getOidcCallbackStatus = () =>
     providerError: false,
     expiresAt: null,
   }));
-export const completeOidcSignIn = () =>
-  call<NativeOidcSessionStatus>("complete_oidc_sign_in");
+export const completeOidcSignIn = () => call<NativeOidcSessionStatus>("complete_oidc_sign_in");
 export const getOidcSessionStatus = () =>
   call<NativeOidcSessionStatus>("get_oidc_session_status", undefined, async () => ({
     active: false,
