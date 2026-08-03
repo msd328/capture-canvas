@@ -78,8 +78,7 @@ pub async fn get_oidc_client_status() -> Result<OidcClientReadiness, String> {
 }
 
 #[tauri::command]
-pub async fn get_oidc_exchange_contract_status(
-) -> Result<OidcExchangeContractStatus, String> {
+pub async fn get_oidc_exchange_contract_status() -> Result<OidcExchangeContractStatus, String> {
     tauri::async_runtime::spawn_blocking(crate::oidc_exchange::status)
         .await
         .map_err(|error| worker_error("OIDC exchange contract status", error))?
