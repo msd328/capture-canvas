@@ -97,7 +97,7 @@ fn verify_signature_with_key(
             .verify(
                 &signature::RSA_PKCS1_2048_8192_SHA256,
                 signing_input,
-                &signature_bytes,
+                signature_bytes.as_slice(),
             )
             .map_err(|_| "signature_mismatch")
         }
@@ -111,9 +111,9 @@ fn verify_signature_with_key(
             public_key[33..].copy_from_slice(y);
             signature::UnparsedPublicKey::new(
                 &signature::ECDSA_P256_SHA256_FIXED,
-                &public_key,
+                public_key.as_slice(),
             )
-            .verify(signing_input, &signature_bytes)
+            .verify(signing_input, signature_bytes.as_slice())
             .map_err(|_| "signature_mismatch")
         }
     }
