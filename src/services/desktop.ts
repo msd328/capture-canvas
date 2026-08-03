@@ -11,6 +11,7 @@ import type {
   WindowInfo,
 } from "@/types/recorder";
 import type {
+  NativeOidcSessionStatus,
   OidcCallbackStatus,
   OidcClientStatus,
   OidcExchangeContractStatus,
@@ -113,6 +114,15 @@ export const getOidcCallbackStatus = () =>
     codeReceived: false,
     providerError: false,
     expiresAt: null,
+  }));
+export const completeOidcSignIn = () =>
+  call<NativeOidcSessionStatus>("complete_oidc_sign_in");
+export const getOidcSessionStatus = () =>
+  call<NativeOidcSessionStatus>("get_oidc_session_status", undefined, async () => ({
+    active: false,
+    expiresAt: null,
+    accessTokenNativeOnly: true,
+    refreshTokenPersisted: false,
   }));
 export const cancelOidcTransaction = () =>
   call<void>("cancel_oidc_transaction", undefined, async () => undefined);
