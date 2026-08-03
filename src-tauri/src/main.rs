@@ -13,6 +13,7 @@ mod commands;
 mod encoding;
 mod oidc;
 mod oidc_exchange;
+mod oidc_jwks;
 mod oidc_loopback;
 mod oidc_token;
 // The bounded WinRT wait macro assigns its timeout flag before returning an
