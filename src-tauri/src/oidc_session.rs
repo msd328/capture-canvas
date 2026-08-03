@@ -61,7 +61,7 @@ struct SessionState {
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
-pub(crate) struct NativeOidcSessionStatus {
+pub struct NativeOidcSessionStatus {
     pub active: bool,
     pub expires_at: Option<DateTime<Utc>>,
     pub access_token_native_only: bool,
@@ -73,7 +73,6 @@ fn runtime() -> &'static Mutex<SessionState> {
     SESSION.get_or_init(|| Mutex::new(SessionState::default()))
 }
 
-#[allow(dead_code)]
 pub(crate) async fn establish_verified_session(
     store: &SecureAuthStore,
 ) -> Result<NativeOidcSessionStatus, String> {
@@ -131,7 +130,6 @@ fn install_session(
     Ok(status_at(now))
 }
 
-#[allow(dead_code)]
 pub(crate) fn status() -> NativeOidcSessionStatus {
     status_at(Instant::now())
 }
@@ -153,7 +151,6 @@ fn status_at(now: Instant) -> NativeOidcSessionStatus {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn clear() -> bool {
     runtime().lock().active.take().is_some()
 }
@@ -222,6 +219,9 @@ mod tests {
             }),
             Ok(())
         );
+        let serialized = serde_json::to_string(&status).unwrap();
+        assert!(!serialized.contains("11111111-1111-4111-8111-111111111111"));
+        assert!(!serialized.contains("header.payload.signature"));
         assert!(!status_at(now + Duration::from_secs(121)).active);
     }
 
