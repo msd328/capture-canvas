@@ -273,7 +273,7 @@ impl OidcCallbackRuntime {
             code_received: state.stage == CallbackStage::CodeReceived,
             provider_error: state.stage == CallbackStage::ProviderError,
             expires_at: if pending {
-                state.last_expires_at
+                state.last_expires_at.clone()
             } else {
                 None
             },
@@ -470,10 +470,10 @@ mod tests {
             .expect("first grant take should succeed");
         assert_eq!(grant.state(), b"expected-state");
         assert_eq!(grant.authorization_code(), b"authorization-code");
-        assert_eq!(
+        assert!(matches!(
             runtime.take_authorization_grant(),
             Err(GrantTakeError::Missing)
-        );
+        ));
         assert_eq!(runtime.status().stage, "grantTaken");
         assert!(!runtime.status().code_received);
     }
