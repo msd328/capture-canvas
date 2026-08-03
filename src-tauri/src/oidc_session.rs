@@ -77,10 +77,12 @@ fn runtime() -> &'static Mutex<SessionState> {
     SESSION.get_or_init(|| Mutex::new(SessionState::default()))
 }
 
-/// Exchange and verify the one-time callback grant, then install a native session.
+/// Exchange and verify the one-time callback grant, persist its refresh token, and
+/// install the native access session as one lock-protected commit.
 ///
-/// The generation snapshot prevents a concurrent clear/logout operation from being
-/// undone by a network request that completes later.
+/// The session candidate is completely validated before any credential write. The
+/// session lock is then held across the credential write/read-back and final
+/// assignment, so clear/logout cannot interleave and be undone by a late completion.
 pub(crate) async fn establish_verified_session(
     store: &SecureAuthStore,
 ) -> Result<NativeOidcSessionStatus, String> {
@@ -88,38 +90,39 @@ pub(crate) async fn establish_verified_session(
     let exchange = oidc_exchange::exchange_authorization_code(store).await?;
     let identity =
         oidc_verify::verify_id_token(exchange.id_token(), exchange.expected_nonce()).await?;
-    install_session(
-        expected_generation,
+    let now = Instant::now();
+    let mut candidate = prepare_session(
         identity.subject(),
         identity.expires_at(),
         exchange.access_token(),
         exchange.expires_in(),
-        Instant::now(),
+        now,
         Utc::now(),
     )
     .map_err(|code| {
-        eprintln!("[Recorder][AuthHealth] stage=oidc_session_install ok=false code={code}");
+        eprintln!("[Recorder][AuthHealth] stage=oidc_session_prepare ok=false code={code}");
         "OIDC access session could not be established".to_string()
     })?;
 
-    if let Err(error) = oidc_refresh::persist_refresh_token(exchange.refresh_token()) {
-        let memory_session_cleared = clear();
+    let mut state = runtime().lock();
+    if state.generation != expected_generation {
         eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_session_commit ok=false code=refresh_persist_failed memory_session_cleared={memory_session_cleared}"
+            "[Recorder][AuthHealth] stage=oidc_session_commit ok=false code=session_cancelled refresh_write_attempted=false"
         );
-        return Err(error);
+        return Err("OIDC access session was cancelled before commit".to_string());
     }
 
-    let status = mark_refresh_token_persisted(expected_generation, identity.subject()).map_err(
-        |code| {
-            let memory_session_cleared = clear();
-            let secure_store_cleared = store.clear().is_ok();
-            eprintln!(
-                "[Recorder][AuthHealth] stage=oidc_session_commit ok=false code={code} memory_session_cleared={memory_session_cleared} secure_store_cleared={secure_store_cleared}"
-            );
-            "OIDC access session could not be committed".to_string()
-        },
-    )?;
+    oidc_refresh::persist_refresh_token(exchange.refresh_token()).map_err(|error| {
+        eprintln!(
+            "[Recorder][AuthHealth] stage=oidc_session_commit ok=false code=refresh_persist_failed session_installed=false"
+        );
+        error
+    })?;
+
+    candidate.refresh_token_persisted = true;
+    state.active = Some(candidate);
+    let status = status_from_state(&mut state, now);
+    drop(state);
 
     eprintln!(
         "[Recorder][AuthHealth] stage=oidc_session_commit ok=true active=true access_token_native_only=true refresh_token_persisted=true paid_access_granted=false"
@@ -131,15 +134,14 @@ fn generation() -> u64 {
     runtime().lock().generation
 }
 
-fn install_session(
-    expected_generation: u64,
+fn prepare_session(
     subject: Uuid,
     identity_expires_at: i64,
     access_token: &[u8],
     expires_in: u64,
     now: Instant,
     now_utc: DateTime<Utc>,
-) -> Result<NativeOidcSessionStatus, &'static str> {
+) -> Result<NativeAccessSession, &'static str> {
     if expires_in == 0 || expires_in > MAX_ACCESS_SESSION_SECONDS {
         return Err("access_token_lifetime_invalid");
     }
@@ -154,43 +156,28 @@ fn install_session(
 
     let access_token = SecretBytes::from_slice(access_token)?;
     let lifetime = Duration::from_secs(lifetime_seconds);
-    let expires_at = now_utc + chrono::Duration::seconds(lifetime_seconds as i64);
+    Ok(NativeAccessSession {
+        subject,
+        access_token,
+        expires_at_instant: now + lifetime,
+        expires_at: now_utc + chrono::Duration::seconds(lifetime_seconds as i64),
+        refresh_token_persisted: false,
+    })
+}
+
+fn install_session(
+    expected_generation: u64,
+    session: NativeAccessSession,
+    refresh_token_persisted: bool,
+    now: Instant,
+) -> Result<NativeOidcSessionStatus, &'static str> {
     let mut state = runtime().lock();
     if state.generation != expected_generation {
         return Err("session_cancelled");
     }
-    state.active = Some(NativeAccessSession {
-        subject,
-        access_token,
-        expires_at_instant: now + lifetime,
-        expires_at,
-        refresh_token_persisted: false,
-    });
-    Ok(status_from_state(&mut state, now))
-}
-
-fn mark_refresh_token_persisted(
-    expected_generation: u64,
-    expected_subject: Uuid,
-) -> Result<NativeOidcSessionStatus, &'static str> {
-    let now = Instant::now();
-    let mut state = runtime().lock();
-    if state.generation != expected_generation {
-        return Err("session_cancelled_before_commit");
-    }
-    if state
-        .active
-        .as_ref()
-        .is_some_and(|session| now >= session.expires_at_instant)
-    {
-        state.active.take();
-        return Err("session_expired_before_commit");
-    }
-    let session = state.active.as_mut().ok_or("session_missing_before_commit")?;
-    if session.subject != expected_subject {
-        return Err("session_subject_changed_before_commit");
-    }
-    session.refresh_token_persisted = true;
+    let mut session = session;
+    session.refresh_token_persisted = refresh_token_persisted;
+    state.active = Some(session);
     Ok(status_from_state(&mut state, now))
 }
 
@@ -261,6 +248,23 @@ mod tests {
         clear();
     }
 
+    fn candidate(
+        subject: Uuid,
+        identity_lifetime: i64,
+        token_lifetime: u64,
+        now: Instant,
+        now_utc: DateTime<Utc>,
+    ) -> Result<NativeAccessSession, &'static str> {
+        prepare_session(
+            subject,
+            now_utc.timestamp() + identity_lifetime,
+            b"header.payload.signature",
+            token_lifetime,
+            now,
+            now_utc,
+        )
+    }
+
     #[test]
     fn verified_session_is_native_only_and_expires_at_the_shorter_deadline() {
         let _guard = test_guard();
@@ -270,17 +274,14 @@ mod tests {
         let subject = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
         let status = install_session(
             generation(),
-            subject,
-            now_utc.timestamp() + 120,
-            b"header.payload.signature",
-            3600,
+            candidate(subject, 120, 3600, now, now_utc).unwrap(),
+            true,
             now,
-            now_utc,
         )
         .unwrap();
         assert!(status.active);
         assert!(status.access_token_native_only);
-        assert!(!status.refresh_token_persisted);
+        assert!(status.refresh_token_persisted);
         assert_eq!(
             status.expires_at,
             Some(now_utc + chrono::Duration::seconds(120))
@@ -300,58 +301,18 @@ mod tests {
     }
 
     #[test]
-    fn refresh_persistence_flag_is_bound_to_generation_and_subject() {
+    fn session_candidate_is_fully_validated_before_commit() {
         let _guard = test_guard();
         reset();
         let now = Instant::now();
         let now_utc = Utc::now();
         let subject = Uuid::new_v4();
-        let current_generation = generation();
-        install_session(
-            current_generation,
-            subject,
-            now_utc.timestamp() + 300,
-            b"a.b.c",
-            300,
-            now,
-            now_utc,
-        )
-        .unwrap();
-
-        assert_eq!(
-            mark_refresh_token_persisted(current_generation, Uuid::new_v4()),
-            Err("session_subject_changed_before_commit")
-        );
-        assert!(!status().refresh_token_persisted);
-
-        let committed = mark_refresh_token_persisted(current_generation, subject).unwrap();
-        assert!(committed.active);
-        assert!(committed.refresh_token_persisted);
-    }
-
-    #[test]
-    fn invalid_or_expired_session_inputs_fail_closed() {
-        let _guard = test_guard();
-        reset();
-        let now = Instant::now();
-        let now_utc = Utc::now();
-        let subject = Uuid::new_v4();
-        let current_generation = generation();
-        assert_eq!(
-            install_session(
-                current_generation,
-                subject,
-                now_utc.timestamp(),
-                b"a.b.c",
-                60,
-                now,
-                now_utc,
-            ),
+        assert!(matches!(
+            prepare_session(subject, now_utc.timestamp(), b"a.b.c", 60, now, now_utc),
             Err("identity_expired")
-        );
-        assert_eq!(
-            install_session(
-                current_generation,
+        ));
+        assert!(matches!(
+            prepare_session(
                 subject,
                 now_utc.timestamp() + 60,
                 b"bad token",
@@ -360,7 +321,7 @@ mod tests {
                 now_utc,
             ),
             Err("access_token_text_invalid")
-        );
+        ));
         assert!(!status().active);
     }
 
@@ -372,12 +333,9 @@ mod tests {
         let now_utc = Utc::now();
         install_session(
             generation(),
-            Uuid::new_v4(),
-            now_utc.timestamp() + 300,
-            b"a.b.c",
-            300,
+            candidate(Uuid::new_v4(), 300, 300, now, now_utc).unwrap(),
+            true,
             now,
-            now_utc,
         )
         .unwrap();
         assert!(clear());
@@ -386,26 +344,19 @@ mod tests {
     }
 
     #[test]
-    fn clear_during_exchange_prevents_late_session_install_or_commit() {
+    fn clear_during_exchange_prevents_late_session_commit() {
         let _guard = test_guard();
         reset();
         let expected_generation = generation();
         let now = Instant::now();
         let now_utc = Utc::now();
+        let prepared = candidate(Uuid::new_v4(), 300, 300, now, now_utc).unwrap();
         clear();
 
-        assert_eq!(
-            install_session(
-                expected_generation,
-                Uuid::new_v4(),
-                now_utc.timestamp() + 300,
-                b"a.b.c",
-                300,
-                now,
-                now_utc,
-            ),
+        assert!(matches!(
+            install_session(expected_generation, prepared, true, now),
             Err("session_cancelled")
-        );
+        ));
         assert!(!status().active);
     }
 }
