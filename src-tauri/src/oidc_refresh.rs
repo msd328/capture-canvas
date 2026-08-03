@@ -192,9 +192,7 @@ mod windows_store {
 
     fn operation_error(stage: &str, error: &windows::core::Error) -> String {
         let code = error.code().0;
-        eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_refresh_store_{stage} ok=false code={code}"
-        );
+        eprintln!("[Recorder][AuthHealth] stage=oidc_refresh_store_{stage} ok=false code={code}");
         format!("Windows refresh credential operation failed at {stage} (code {code})")
     }
 
@@ -219,8 +217,7 @@ mod windows_store {
             UserName: PWSTR::default(),
         };
 
-        unsafe { CredWriteW(&credential, 0) }
-            .map_err(|error| operation_error("write", &error))
+        unsafe { CredWriteW(&credential, 0) }.map_err(|error| operation_error("write", &error))
     }
 
     pub(super) fn read_secret() -> Result<Option<Vec<u8>>, String> {
