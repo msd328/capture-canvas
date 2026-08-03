@@ -18,9 +18,7 @@ type ServerGlobal = typeof globalThis & {
   process?: { env?: ServerEnvironment };
 };
 
-type BoundedJsonResult =
-  | { ok: true; value: unknown }
-  | { ok: false; response: Response };
+type BoundedJsonResult = { ok: true; value: unknown } | { ok: false; response: Response };
 
 function responseHeaders(extra?: HeadersInit): Headers {
   const headers = new Headers({
@@ -34,11 +32,7 @@ function responseHeaders(extra?: HeadersInit): Headers {
   return headers;
 }
 
-function jsonResponse(
-  body: unknown,
-  status = 200,
-  extraHeaders?: HeadersInit,
-): Response {
+function jsonResponse(body: unknown, status = 200, extraHeaders?: HeadersInit): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: responseHeaders(extraHeaders),
@@ -92,9 +86,7 @@ function isTrustedServerUrl(value: string | undefined): boolean {
     if (url.protocol === "https:") return true;
     return (
       url.protocol === "http:" &&
-      (url.hostname === "127.0.0.1" ||
-        url.hostname === "[::1]" ||
-        url.hostname === "::1")
+      (url.hostname === "127.0.0.1" || url.hostname === "[::1]" || url.hostname === "::1")
     );
   } catch {
     return false;
@@ -107,10 +99,7 @@ function configuredUploadLimit(env: unknown): number {
 
   const parsed = Number(raw);
   if (!Number.isSafeInteger(parsed)) return MAX_RECORDING_UPLOAD_BYTES;
-  return Math.min(
-    MAX_RECORDING_UPLOAD_BYTES,
-    Math.max(MIN_CONFIGURED_UPLOAD_BYTES, parsed),
-  );
+  return Math.min(MAX_RECORDING_UPLOAD_BYTES, Math.max(MIN_CONFIGURED_UPLOAD_BYTES, parsed));
 }
 
 function capabilities(env: unknown) {
@@ -191,11 +180,7 @@ function readWithDeadline(
 }
 
 async function readBoundedJson(request: Request): Promise<BoundedJsonResult> {
-  const contentType = request.headers
-    .get("content-type")
-    ?.split(";", 1)[0]
-    ?.trim()
-    .toLowerCase();
+  const contentType = request.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
   if (contentType !== "application/json") {
     return {
       ok: false,
@@ -207,10 +192,7 @@ async function readBoundedJson(request: Request): Promise<BoundedJsonResult> {
     };
   }
 
-  const contentEncoding = request.headers
-    .get("content-encoding")
-    ?.trim()
-    .toLowerCase();
+  const contentEncoding = request.headers.get("content-encoding")?.trim().toLowerCase();
   if (contentEncoding && contentEncoding !== "identity") {
     return {
       ok: false,
@@ -230,11 +212,7 @@ async function readBoundedJson(request: Request): Promise<BoundedJsonResult> {
   if (!request.body) {
     return {
       ok: false,
-      response: errorResponse(
-        400,
-        "bad_request",
-        "A JSON request body is required.",
-      ),
+      response: errorResponse(400, "bad_request", "A JSON request body is required."),
     };
   }
 
@@ -276,11 +254,7 @@ async function readBoundedJson(request: Request): Promise<BoundedJsonResult> {
   } catch {
     return {
       ok: false,
-      response: errorResponse(
-        400,
-        "bad_request",
-        "Unable to read the request body.",
-      ),
+      response: errorResponse(400, "bad_request", "Unable to read the request body."),
     };
   }
 
@@ -308,11 +282,7 @@ async function readBoundedJson(request: Request): Promise<BoundedJsonResult> {
   } catch {
     return {
       ok: false,
-      response: errorResponse(
-        400,
-        "bad_request",
-        "Request body must be valid UTF-8.",
-      ),
+      response: errorResponse(400, "bad_request", "Request body must be valid UTF-8."),
     };
   }
 
@@ -321,26 +291,16 @@ async function readBoundedJson(request: Request): Promise<BoundedJsonResult> {
   } catch {
     return {
       ok: false,
-      response: errorResponse(
-        400,
-        "bad_request",
-        "Request body must contain valid JSON.",
-      ),
+      response: errorResponse(400, "bad_request", "Request body must contain valid JSON."),
     };
   }
 }
 
-async function handleUploadSessionRequest(
-  request: Request,
-  env: unknown,
-): Promise<Response> {
+async function handleUploadSessionRequest(request: Request, env: unknown): Promise<Response> {
   if (request.method !== "POST") {
-    return errorResponse(
-      405,
-      "method_not_allowed",
-      "Upload sessions must be created with POST.",
-      { allow: "POST, OPTIONS" },
-    );
+    return errorResponse(405, "method_not_allowed", "Upload sessions must be created with POST.", {
+      allow: "POST, OPTIONS",
+    });
   }
 
   const body = await readBoundedJson(request);
