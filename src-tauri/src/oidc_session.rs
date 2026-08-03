@@ -78,7 +78,8 @@ pub(crate) async fn establish_verified_session(
     store: &SecureAuthStore,
 ) -> Result<NativeOidcSessionStatus, String> {
     let exchange = oidc_exchange::exchange_authorization_code(store).await?;
-    let identity = oidc_verify::verify_id_token(exchange.id_token(), exchange.expected_nonce()).await?;
+    let identity =
+        oidc_verify::verify_id_token(exchange.id_token(), exchange.expected_nonce()).await?;
     let status = install_session(
         identity.subject(),
         identity.expires_at(),
@@ -181,12 +182,18 @@ pub(crate) fn with_access_token<T>(
 mod tests {
     use super::*;
 
+    fn test_guard() -> parking_lot::MutexGuard<'static, ()> {
+        static TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        TEST_LOCK.get_or_init(|| Mutex::new(())).lock()
+    }
+
     fn reset() {
         clear();
     }
 
     #[test]
     fn verified_session_is_native_only_and_expires_at_the_shorter_deadline() {
+        let _guard = test_guard();
         reset();
         let now = Instant::now();
         let now_utc = Utc::now();
@@ -203,7 +210,10 @@ mod tests {
         assert!(status.active);
         assert!(status.access_token_native_only);
         assert!(!status.refresh_token_persisted);
-        assert_eq!(status.expires_at, Some(now_utc + chrono::Duration::seconds(120)));
+        assert_eq!(
+            status.expires_at,
+            Some(now_utc + chrono::Duration::seconds(120))
+        );
         assert_eq!(
             with_access_token(|stored_subject, token| {
                 assert_eq!(stored_subject, subject);
@@ -217,6 +227,7 @@ mod tests {
 
     #[test]
     fn invalid_or_expired_session_inputs_fail_closed() {
+        let _guard = test_guard();
         reset();
         let now = Instant::now();
         let now_utc = Utc::now();
@@ -241,6 +252,7 @@ mod tests {
 
     #[test]
     fn clearing_drops_the_active_native_session() {
+        let _guard = test_guard();
         reset();
         let now = Instant::now();
         let now_utc = Utc::now();
