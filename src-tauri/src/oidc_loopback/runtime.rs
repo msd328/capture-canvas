@@ -1,4 +1,5 @@
 use super::{OidcCallbackStatus, CALLBACK_TIMEOUT};
+use crate::auth::{OidcConsumeError, OidcExchangeMaterial, SecureAuthStore};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use std::sync::OnceLock;
@@ -60,7 +61,7 @@ struct ActiveCallback {
     expires_at_instant: Instant,
 }
 
-pub(super) struct NativeAuthorizationGrant {
+struct NativeAuthorizationGrant {
     generation: u64,
     state: SecretText,
     authorization_code: SecretText,
@@ -68,12 +69,27 @@ pub(super) struct NativeAuthorizationGrant {
 }
 
 impl NativeAuthorizationGrant {
-    pub(super) fn state(&self) -> &[u8] {
+    fn state(&self) -> &[u8] {
         self.state.as_bytes()
     }
+}
 
+pub(super) struct NativeOidcExchangeGrant {
+    authorization_code: SecretText,
+    material: OidcExchangeMaterial,
+}
+
+impl NativeOidcExchangeGrant {
     pub(super) fn authorization_code(&self) -> &[u8] {
         self.authorization_code.as_bytes()
+    }
+
+    pub(super) fn nonce(&self) -> &[u8] {
+        self.material.nonce()
+    }
+
+    pub(super) fn code_verifier(&self) -> &[u8] {
+        self.material.code_verifier()
     }
 }
 
@@ -162,7 +178,10 @@ impl OidcCallbackRuntime {
         Ok(())
     }
 
-    fn take_authorization_grant(&self) -> Result<NativeAuthorizationGrant, GrantTakeError> {
+    fn take_exchange_grant(
+        &self,
+        store: &SecureAuthStore,
+    ) -> Result<NativeOidcExchangeGrant, ExchangeGrantTakeError> {
         let mut state = self.state.lock();
         let now = Instant::now();
         if state
@@ -172,17 +191,47 @@ impl OidcCallbackRuntime {
         {
             state.grant = None;
             state.stage = CallbackStage::TimedOut;
-            return Err(GrantTakeError::Expired);
+            drop(state);
+            store.cancel_oidc_transaction();
+            return Err(ExchangeGrantTakeError::Expired);
         }
         if state.stage != CallbackStage::CodeReceived {
-            return Err(GrantTakeError::Missing);
+            drop(state);
+            store.cancel_oidc_transaction();
+            return Err(ExchangeGrantTakeError::Missing);
         }
+
+        let material = match state.grant.as_ref() {
+            Some(grant) => store.take_oidc_exchange_material(grant.state()),
+            None => {
+                state.stage = CallbackStage::Failed;
+                drop(state);
+                store.cancel_oidc_transaction();
+                return Err(ExchangeGrantTakeError::Missing);
+            }
+        };
+        let material = match material {
+            Ok(material) => material,
+            Err(error) => {
+                state.grant = None;
+                state.stage = CallbackStage::Failed;
+                drop(state);
+                store.cancel_oidc_transaction();
+                return Err(ExchangeGrantTakeError::Auth(error));
+            }
+        };
+
         let Some(grant) = state.grant.take() else {
             state.stage = CallbackStage::Failed;
-            return Err(GrantTakeError::Missing);
+            drop(state);
+            store.cancel_oidc_transaction();
+            return Err(ExchangeGrantTakeError::Missing);
         };
         state.stage = CallbackStage::GrantTaken;
-        Ok(grant)
+        Ok(NativeOidcExchangeGrant {
+            authorization_code: grant.authorization_code,
+            material,
+        })
     }
 
     fn accept_provider_error(
@@ -271,7 +320,7 @@ impl OidcCallbackRuntime {
             code_received: state.stage == CallbackStage::CodeReceived,
             provider_error: state.stage == CallbackStage::ProviderError,
             expires_at: if pending {
-                state.last_expires_at.clone()
+                state.last_expires_at
             } else {
                 None
             },
@@ -308,9 +357,22 @@ pub(super) enum AcceptError {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum GrantTakeError {
+pub(super) enum ExchangeGrantTakeError {
     Missing,
     Expired,
+    Auth(OidcConsumeError),
+}
+
+impl ExchangeGrantTakeError {
+    fn code(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::Expired => "expired",
+            Self::Auth(OidcConsumeError::Missing) => "pkce_missing",
+            Self::Auth(OidcConsumeError::Expired) => "pkce_expired",
+            Self::Auth(OidcConsumeError::StateMismatch) => "state_mismatch",
+        }
+    }
 }
 
 fn instance() -> &'static OidcCallbackRuntime {
@@ -354,22 +416,21 @@ pub(super) fn accept_code(
 }
 
 #[allow(dead_code)]
-pub(super) fn take_authorization_grant() -> Result<NativeAuthorizationGrant, GrantTakeError> {
-    let result = instance().take_authorization_grant();
+pub(super) fn take_exchange_grant(
+    store: &SecureAuthStore,
+) -> Result<NativeOidcExchangeGrant, ExchangeGrantTakeError> {
+    let result = instance().take_exchange_grant(store);
     match result {
         Ok(grant) => {
             eprintln!(
-                "[Recorder][AuthHealth] stage=oidc_callback_grant_take ok=true replay_rejected=true secrets_kept_native=true"
+                "[Recorder][AuthHealth] stage=oidc_exchange_grant_take ok=true callback_taken=true pkce_taken=true nonce_kept_native=true verifier_kept_native=true replay_rejected=true"
             );
             Ok(grant)
         }
         Err(error) => {
-            let code = match error {
-                GrantTakeError::Missing => "missing",
-                GrantTakeError::Expired => "expired",
-            };
             eprintln!(
-                "[Recorder][AuthHealth] stage=oidc_callback_grant_take ok=false code={code}"
+                "[Recorder][AuthHealth] stage=oidc_exchange_grant_take ok=false code={} callback_retained=false pkce_retained=false",
+                error.code()
             );
             Err(error)
         }
@@ -448,30 +509,60 @@ mod tests {
     }
 
     #[test]
-    fn authorization_grant_can_be_taken_only_once() {
+    fn callback_and_pkce_material_are_taken_together_once() {
+        let store = SecureAuthStore::new();
+        let preparation = store.prepare_oidc_transaction();
         let runtime = OidcCallbackRuntime::new();
-        let generation = runtime.begin(
-            "expected-state".to_string(),
-            Utc::now() + chrono::Duration::minutes(10),
-        );
+        let generation = runtime.begin(preparation.state.clone(), preparation.expires_at);
         runtime
             .accept_code(
                 generation,
-                "expected-state".to_string(),
+                preparation.state.clone(),
                 "authorization-code".to_string(),
             )
             .expect("matching callback should be accepted");
 
         let grant = runtime
-            .take_authorization_grant()
-            .expect("first grant take should succeed");
-        assert_eq!(grant.state(), b"expected-state");
+            .take_exchange_grant(&store)
+            .expect("coordinated grant take should succeed");
         assert_eq!(grant.authorization_code(), b"authorization-code");
+        assert_eq!(grant.nonce(), preparation.nonce.as_bytes());
+        assert_eq!(grant.code_verifier().len(), 43);
+        assert!(grant
+            .code_verifier()
+            .iter()
+            .all(|byte| byte.is_ascii_alphanumeric() || *byte == b'-' || *byte == b'_'));
+        assert!(!store.oidc_transaction_status().pending);
         assert!(matches!(
-            runtime.take_authorization_grant(),
-            Err(GrantTakeError::Missing)
+            runtime.take_exchange_grant(&store),
+            Err(ExchangeGrantTakeError::Missing)
         ));
         assert_eq!(runtime.status().stage, "grantTaken");
         assert!(!runtime.status().code_received);
+    }
+
+    #[test]
+    fn mismatched_callback_and_pkce_state_clear_both_sides() {
+        let store = SecureAuthStore::new();
+        let preparation = store.prepare_oidc_transaction();
+        let runtime = OidcCallbackRuntime::new();
+        let generation = runtime.begin("different-state".to_string(), preparation.expires_at);
+        runtime
+            .accept_code(
+                generation,
+                "different-state".to_string(),
+                "authorization-code".to_string(),
+            )
+            .expect("callback runtime state should match itself");
+
+        assert!(matches!(
+            runtime.take_exchange_grant(&store),
+            Err(ExchangeGrantTakeError::Auth(
+                OidcConsumeError::StateMismatch
+            ))
+        ));
+        assert_eq!(runtime.status().stage, "failed");
+        assert!(!runtime.status().code_received);
+        assert!(!store.oidc_transaction_status().pending);
     }
 }
