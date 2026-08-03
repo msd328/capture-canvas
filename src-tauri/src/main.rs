@@ -12,6 +12,7 @@ mod capture;
 mod commands;
 mod encoding;
 mod oidc;
+mod oidc_claims;
 mod oidc_exchange;
 mod oidc_jwks;
 mod oidc_loopback;
