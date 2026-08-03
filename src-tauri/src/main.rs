@@ -16,6 +16,7 @@ mod oidc_claims;
 mod oidc_exchange;
 mod oidc_jwks;
 mod oidc_loopback;
+mod oidc_refresh;
 mod oidc_session;
 mod oidc_token;
 mod oidc_verify;
