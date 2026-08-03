@@ -1,18 +1,23 @@
-//! Provider-aligned native OAuth token exchange contracts.
+//! Provider-aligned native OAuth token exchange contracts and bounded transport.
 //!
 //! This module prepares the exact public-client form bodies required by the
-//! Supabase OAuth 2.1 server and strictly validates bounded success responses.
-//! It deliberately performs no network request and persists no token. The next
-//! native grant-handoff batch will connect these contracts to the one-time
-//! authorization code, PKCE verifier, nonce, HTTPS transport and ID-token checks.
+//! Supabase OAuth 2.1 server, strictly validates bounded success responses, and
+//! provides a private HTTPS transport primitive for the future ID-token verifier.
+//! It does not establish a signed-in session or persist any token.
 
-use crate::{oidc, oidc_token};
+use crate::{auth::SecureAuthStore, oidc, oidc_loopback, oidc_token};
+use reqwest::{
+    header::{HeaderMap, ACCEPT, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE},
+    redirect::Policy,
+    Client, Response, StatusCode,
+};
 use serde::{
     de::{self, MapAccess, Visitor},
     Deserialize, Deserializer, Serialize,
 };
 use std::fmt;
 use std::sync::atomic::{compiler_fence, Ordering};
+use std::time::Duration;
 
 const MAX_TOKEN_REQUEST_BYTES: usize = 16 * 1024;
 const MAX_TOKEN_RESPONSE_BYTES: usize = 64 * 1024;
@@ -26,6 +31,12 @@ const MAX_AUTHORIZATION_CODE_BYTES: usize = 4 * 1024;
 const MIN_PKCE_VERIFIER_BYTES: usize = 43;
 const MAX_PKCE_VERIFIER_BYTES: usize = 128;
 const MAX_TOKEN_LIFETIME_SECONDS: u64 = 24 * 60 * 60;
+const TOKEN_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const TOKEN_READ_TIMEOUT: Duration = Duration::from_secs(5);
+const TOKEN_TOTAL_TIMEOUT: Duration = Duration::from_secs(12);
+
+const BUILD_CLIENT_ID: Option<&str> = option_env!("RECORDER_OIDC_CLIENT_ID");
+const BUILD_REDIRECT_URI: Option<&str> = option_env!("RECORDER_OIDC_REDIRECT_URI");
 
 const TOKEN_RESPONSE_FIELDS: &[&str] = &[
     "access_token",
@@ -44,10 +55,16 @@ pub struct OidcExchangeContractStatus {
     pub authorization_code_form_supported: bool,
     pub refresh_token_form_supported: bool,
     pub strict_response_parser: bool,
+    pub bounded_https_transport_supported: bool,
+    pub redirects_disabled: bool,
+    pub runtime_proxy_disabled: bool,
     pub network_exchange_enabled: bool,
     pub identity_validation_enabled: bool,
     pub max_request_bytes: usize,
     pub max_response_bytes: usize,
+    pub connect_timeout_seconds: u64,
+    pub read_timeout_seconds: u64,
+    pub total_timeout_seconds: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -59,7 +76,16 @@ pub struct OidcExchangeProbe {
     pub duplicate_field_rejected: bool,
     pub unknown_field_rejected: bool,
     pub oversized_response_rejected: bool,
+    pub transport_client_ok: bool,
+    pub strict_json_headers_ok: bool,
+    pub redirect_response_rejected: bool,
+    pub oversized_declared_response_rejected: bool,
     pub secrets_kept_native: bool,
+}
+
+struct PublicClientMetadata {
+    client_id: &'static str,
+    redirect_uri: &'static str,
 }
 
 struct SecretBytes(Vec<u8>);
@@ -67,6 +93,10 @@ struct SecretBytes(Vec<u8>);
 impl SecretBytes {
     fn new(value: String) -> Self {
         Self(value.into_bytes())
+    }
+
+    fn from_bytes(value: Vec<u8>) -> Self {
+        Self(value)
     }
 
     fn expose(&self) -> &[u8] {
@@ -89,6 +119,39 @@ struct ParsedTokenResponse {
     refresh_token: SecretBytes,
     scope: Vec<String>,
     id_token: SecretBytes,
+}
+
+#[allow(dead_code)]
+pub(crate) struct UnverifiedOidcExchange {
+    tokens: ParsedTokenResponse,
+    expected_nonce: SecretBytes,
+}
+
+#[allow(dead_code)]
+impl UnverifiedOidcExchange {
+    pub(crate) fn access_token(&self) -> &[u8] {
+        self.tokens.access_token.expose()
+    }
+
+    pub(crate) fn expires_in(&self) -> u64 {
+        self.tokens.expires_in
+    }
+
+    pub(crate) fn refresh_token(&self) -> &[u8] {
+        self.tokens.refresh_token.expose()
+    }
+
+    pub(crate) fn scopes(&self) -> &[String] {
+        &self.tokens.scope
+    }
+
+    pub(crate) fn id_token(&self) -> &[u8] {
+        self.tokens.id_token.expose()
+    }
+
+    pub(crate) fn expected_nonce(&self) -> &[u8] {
+        self.expected_nonce.expose()
+    }
 }
 
 struct RawTokenResponse {
@@ -231,8 +294,9 @@ pub fn status() -> Result<OidcExchangeContractStatus, String> {
     let client = oidc::client_status()?;
     let token = oidc_token::status()?;
     let configured = client.configured && token.configured;
+    let bounded_https_transport_supported = build_transport_client().is_ok();
     eprintln!(
-        "[Recorder][AuthHealth] stage=oidc_exchange_contract ok=true configured={configured} public_client=true network_exchange=false identity_validation=false"
+        "[Recorder][AuthHealth] stage=oidc_exchange_contract ok=true configured={configured} public_client=true bounded_https_transport={bounded_https_transport_supported} redirects_disabled=true runtime_proxy_disabled=true network_exchange=false identity_validation=false"
     );
     Ok(OidcExchangeContractStatus {
         configured,
@@ -240,10 +304,16 @@ pub fn status() -> Result<OidcExchangeContractStatus, String> {
         authorization_code_form_supported: true,
         refresh_token_form_supported: true,
         strict_response_parser: true,
+        bounded_https_transport_supported,
+        redirects_disabled: true,
+        runtime_proxy_disabled: true,
         network_exchange_enabled: false,
         identity_validation_enabled: false,
         max_request_bytes: MAX_TOKEN_REQUEST_BYTES,
         max_response_bytes: MAX_TOKEN_RESPONSE_BYTES,
+        connect_timeout_seconds: TOKEN_CONNECT_TIMEOUT.as_secs(),
+        read_timeout_seconds: TOKEN_READ_TIMEOUT.as_secs(),
+        total_timeout_seconds: TOKEN_TOTAL_TIMEOUT.as_secs(),
     })
 }
 
@@ -308,14 +378,37 @@ pub fn probe() -> OidcExchangeProbe {
     .is_err();
     let oversized_response_rejected =
         parse_token_response(&vec![b'x'; MAX_TOKEN_RESPONSE_BYTES + 1]).is_err();
+    let transport_client_ok = build_transport_client().is_ok();
+
+    let mut valid_headers = HeaderMap::new();
+    valid_headers.insert(CONTENT_TYPE, "application/json; charset=utf-8".parse().unwrap());
+    valid_headers.insert(CONTENT_LENGTH, "2".parse().unwrap());
+    let strict_json_headers_ok =
+        validate_success_response_headers(StatusCode::OK, &valid_headers).is_ok();
+    let redirect_response_rejected =
+        validate_success_response_headers(StatusCode::FOUND, &valid_headers).is_err();
+
+    let mut oversized_headers = HeaderMap::new();
+    oversized_headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+    oversized_headers.insert(
+        CONTENT_LENGTH,
+        (MAX_TOKEN_RESPONSE_BYTES + 1).to_string().parse().unwrap(),
+    );
+    let oversized_declared_response_rejected =
+        validate_success_response_headers(StatusCode::OK, &oversized_headers).is_err();
+
     let ok = authorization_code_form_ok
         && refresh_token_form_ok
         && token_response_ok
         && duplicate_field_rejected
         && unknown_field_rejected
-        && oversized_response_rejected;
+        && oversized_response_rejected
+        && transport_client_ok
+        && strict_json_headers_ok
+        && redirect_response_rejected
+        && oversized_declared_response_rejected;
     eprintln!(
-        "[Recorder][AuthHealth] stage=oidc_exchange_probe ok={ok} authorization_form={authorization_code_form_ok} refresh_form={refresh_token_form_ok} token_response={token_response_ok} duplicate_rejected={duplicate_field_rejected} unknown_rejected={unknown_field_rejected} oversized_rejected={oversized_response_rejected} secrets_kept_native=true"
+        "[Recorder][AuthHealth] stage=oidc_exchange_probe ok={ok} authorization_form={authorization_code_form_ok} refresh_form={refresh_token_form_ok} token_response={token_response_ok} duplicate_rejected={duplicate_field_rejected} unknown_rejected={unknown_field_rejected} oversized_rejected={oversized_response_rejected} transport_client={transport_client_ok} strict_json_headers={strict_json_headers_ok} redirect_rejected={redirect_response_rejected} declared_oversize_rejected={oversized_declared_response_rejected} secrets_kept_native=true"
     );
 
     OidcExchangeProbe {
@@ -325,8 +418,215 @@ pub fn probe() -> OidcExchangeProbe {
         duplicate_field_rejected,
         unknown_field_rejected,
         oversized_response_rejected,
+        transport_client_ok,
+        strict_json_headers_ok,
+        redirect_response_rejected,
+        oversized_declared_response_rejected,
         secrets_kept_native: true,
     }
+}
+
+#[allow(dead_code)]
+pub(crate) async fn exchange_authorization_code(
+    store: &SecureAuthStore,
+) -> Result<UnverifiedOidcExchange, String> {
+    let token_config = oidc_token::require_configured()?;
+    let public_client = require_public_client_metadata()?;
+    let client = build_transport_client()?;
+    let grant = oidc_loopback::take_exchange_grant(store)?;
+    let request_body = build_authorization_code_request(
+        grant.authorization_code(),
+        public_client.client_id.as_bytes(),
+        public_client.redirect_uri.as_bytes(),
+        grant.code_verifier(),
+    )?;
+    let expected_nonce = SecretBytes::from_bytes(grant.nonce().to_vec());
+
+    eprintln!(
+        "[Recorder][AuthHealth] stage=oidc_token_request_start ok=true request_bytes={} redirects_disabled=true retries_disabled=true runtime_proxy_disabled=true",
+        request_body.len()
+    );
+    let response = client
+        .post(token_config.token_endpoint.as_str())
+        .header(CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(ACCEPT, "application/json")
+        .header(ACCEPT_ENCODING, "identity")
+        .body(request_body)
+        .send()
+        .await
+        .map_err(|error| transport_error("oidc_token_request_send", &error))?;
+
+    if response.url().as_str() != token_config.token_endpoint.as_str() {
+        eprintln!(
+            "[Recorder][AuthHealth] stage=oidc_token_response_headers ok=false code=endpoint_changed"
+        );
+        return Err("OIDC token endpoint response origin changed unexpectedly".to_string());
+    }
+    validate_success_response_headers(response.status(), response.headers()).map_err(|code| {
+        eprintln!(
+            "[Recorder][AuthHealth] stage=oidc_token_response_headers ok=false code={code}"
+        );
+        "OIDC token endpoint returned an unacceptable response".to_string()
+    })?;
+    let response_bytes = read_bounded_response(response).await?;
+    let response_size = response_bytes.len();
+    let tokens = parse_token_response(&response_bytes).map_err(|code| {
+        eprintln!(
+            "[Recorder][AuthHealth] stage=oidc_token_response_parse ok=false code={code}"
+        );
+        "OIDC token endpoint returned an invalid token response".to_string()
+    })?;
+
+    eprintln!(
+        "[Recorder][AuthHealth] stage=oidc_token_exchange ok=true response_bytes={response_size} tokens_persisted=false identity_validated=false"
+    );
+    Ok(UnverifiedOidcExchange {
+        tokens,
+        expected_nonce,
+    })
+}
+
+fn require_public_client_metadata() -> Result<PublicClientMetadata, String> {
+    let status = oidc::client_status()?;
+    if !status.configured {
+        return Err("OIDC public client is not configured in this build".to_string());
+    }
+    let client_id = BUILD_CLIENT_ID
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "OIDC client ID is not configured in this build".to_string())?;
+    let redirect_uri = BUILD_REDIRECT_URI
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "OIDC redirect URI is not configured in this build".to_string())?;
+    validate_opaque(client_id.as_bytes(), 1, MAX_CLIENT_ID_BYTES, "client_id")?;
+    validate_opaque(
+        redirect_uri.as_bytes(),
+        1,
+        MAX_REDIRECT_URI_BYTES,
+        "redirect_uri",
+    )?;
+    Ok(PublicClientMetadata {
+        client_id,
+        redirect_uri,
+    })
+}
+
+fn build_transport_client() -> Result<Client, String> {
+    Client::builder()
+        .tls_backend_rustls()
+        .redirect(Policy::none())
+        .retry(reqwest::retry::never())
+        .referer(false)
+        .no_proxy()
+        .gzip(false)
+        .brotli(false)
+        .deflate(false)
+        .zstd(false)
+        .connect_timeout(TOKEN_CONNECT_TIMEOUT)
+        .read_timeout(TOKEN_READ_TIMEOUT)
+        .timeout(TOKEN_TOTAL_TIMEOUT)
+        .tcp_nodelay(true)
+        .user_agent("Recorder/0.1 native-oidc-public-client")
+        .build()
+        .map_err(|_| "Unable to initialize the bounded OIDC HTTPS client".to_string())
+}
+
+fn validate_success_response_headers(
+    status: StatusCode,
+    headers: &HeaderMap,
+) -> Result<(), &'static str> {
+    if status != StatusCode::OK {
+        return Err("http_status");
+    }
+
+    let mut content_types = headers.get_all(CONTENT_TYPE).iter();
+    let content_type = content_types.next().ok_or("content_type_missing")?;
+    if content_types.next().is_some() {
+        return Err("content_type_multiple");
+    }
+    let content_type = content_type
+        .to_str()
+        .map_err(|_| "content_type_invalid")?;
+    let mut parts = content_type.split(';');
+    if !parts
+        .next()
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
+    {
+        return Err("content_type_invalid");
+    }
+    for parameter in parts {
+        if !parameter.trim().eq_ignore_ascii_case("charset=utf-8") {
+            return Err("content_type_parameter_unapproved");
+        }
+    }
+
+    let mut content_encodings = headers.get_all(CONTENT_ENCODING).iter();
+    if let Some(value) = content_encodings.next() {
+        if content_encodings.next().is_some() {
+            return Err("content_encoding_multiple");
+        }
+        let value = value.to_str().map_err(|_| "content_encoding_invalid")?;
+        if !value.trim().eq_ignore_ascii_case("identity") {
+            return Err("content_encoding_unapproved");
+        }
+    }
+
+    let declared_lengths: Vec<_> = headers.get_all(CONTENT_LENGTH).iter().collect();
+    if declared_lengths.len() > 1 {
+        return Err("content_length_multiple");
+    }
+    if let Some(value) = declared_lengths.first() {
+        let value = value.to_str().map_err(|_| "content_length_invalid")?;
+        if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err("content_length_invalid");
+        }
+        let declared = value
+            .parse::<u64>()
+            .map_err(|_| "content_length_invalid")?;
+        if declared > MAX_TOKEN_RESPONSE_BYTES as u64 {
+            return Err("content_length_too_large");
+        }
+    }
+    Ok(())
+}
+
+async fn read_bounded_response(mut response: Response) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::with_capacity(response.content_length().unwrap_or(0) as usize);
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| transport_error("oidc_token_response_read", &error))?
+    {
+        let next_size = bytes
+            .len()
+            .checked_add(chunk.len())
+            .ok_or_else(|| "OIDC token response size overflowed".to_string())?;
+        if next_size > MAX_TOKEN_RESPONSE_BYTES {
+            eprintln!(
+                "[Recorder][AuthHealth] stage=oidc_token_response_read ok=false code=body_too_large"
+            );
+            return Err("OIDC token response exceeded the configured size limit".to_string());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+fn transport_error(stage: &str, error: &reqwest::Error) -> String {
+    let code = if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_request() {
+        "request"
+    } else if error.is_body() {
+        "body"
+    } else {
+        "transport"
+    };
+    eprintln!("[Recorder][AuthHealth] stage={stage} ok=false code={code}");
+    "OIDC token endpoint communication failed".to_string()
 }
 
 fn build_authorization_code_request(
@@ -607,5 +907,41 @@ mod tests {
         )
         .is_err());
         assert!(parse_token_response(&vec![b'x'; MAX_TOKEN_RESPONSE_BYTES + 1]).is_err());
+    }
+
+    #[test]
+    fn strict_response_headers_reject_redirects_and_oversized_lengths() {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "application/json; charset=utf-8".parse().unwrap());
+        headers.insert(CONTENT_LENGTH, "2".parse().unwrap());
+        assert!(validate_success_response_headers(StatusCode::OK, &headers).is_ok());
+        assert!(validate_success_response_headers(StatusCode::FOUND, &headers).is_err());
+
+        headers.insert(
+            CONTENT_LENGTH,
+            (MAX_TOKEN_RESPONSE_BYTES + 1).to_string().parse().unwrap(),
+        );
+        assert!(validate_success_response_headers(StatusCode::OK, &headers).is_err());
+    }
+
+    #[test]
+    fn response_content_type_allows_only_json_and_utf8() {
+        let mut headers = HeaderMap::new();
+        headers.insert(CONTENT_TYPE, "text/html".parse().unwrap());
+        assert!(validate_success_response_headers(StatusCode::OK, &headers).is_err());
+
+        headers.insert(
+            CONTENT_TYPE,
+            "application/json; charset=iso-8859-1".parse().unwrap(),
+        );
+        assert!(validate_success_response_headers(StatusCode::OK, &headers).is_err());
+
+        headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
+        assert!(validate_success_response_headers(StatusCode::OK, &headers).is_ok());
+    }
+
+    #[test]
+    fn bounded_transport_client_builds_without_network_access() {
+        assert!(build_transport_client().is_ok());
     }
 }
