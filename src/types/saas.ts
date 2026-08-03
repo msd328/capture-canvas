@@ -78,6 +78,13 @@ export interface OidcCallbackStatus {
   expiresAt: string | null;
 }
 
+export interface NativeOidcSessionStatus {
+  active: boolean;
+  expiresAt: string | null;
+  accessTokenNativeOnly: boolean;
+  refreshTokenPersisted: boolean;
+}
+
 export interface OidcTransactionProbe {
   s256Ready: boolean;
   stateRoundTripOk: boolean;
