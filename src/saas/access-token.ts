@@ -11,6 +11,12 @@ const MAX_TOKEN_LIFETIME_SECONDS = 24 * 60 * 60;
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const KID_PATTERN = /^[A-Za-z0-9._~-]{1,128}$/;
+const CONFIGURATION_ERROR_PREFIXES = [
+  "access_token_trust_",
+  "access_token_client_id_",
+  "access_token_jwks_uri_",
+  "access_token_algorithm_",
+];
 
 type ServerEnvironment = Record<string, string | undefined>;
 type ServerGlobal = typeof globalThis & {
@@ -64,6 +70,10 @@ function envValue(env: unknown, key: string): string | undefined {
   return recordValue((globalThis as ServerGlobal).process?.env, key);
 }
 
+function isNumericLoopback(hostname: string): boolean {
+  return hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+}
+
 function requireTrustConfig(env: unknown): AccessTokenTrustConfig {
   const supabase = requireSupabaseServerConfig(env);
   const rawJwksUri = envValue(env, "RECORDER_AUTH_JWKS_URI");
@@ -85,8 +95,11 @@ function requireTrustConfig(env: unknown): AccessTokenTrustConfig {
   } catch {
     throw new Error("access_token_jwks_uri_invalid");
   }
+  const trustedTransport =
+    jwksUri.protocol === "https:" ||
+    (jwksUri.protocol === "http:" && isNumericLoopback(jwksUri.hostname));
   if (
-    jwksUri.protocol !== "https:" ||
+    !trustedTransport ||
     !jwksUri.hostname ||
     jwksUri.username ||
     jwksUri.password ||
@@ -304,30 +317,7 @@ async function readBoundedResponse(response: Response, maximumBytes: number): Pr
   return bytes;
 }
 
-async function fetchJwks(uri: string, forceRefresh: boolean): Promise<JsonWebKey[]> {
-  const cached = jwksCache.get(uri);
-  if (!forceRefresh && cached && Date.now() < cached.expiresAt) return cached.keys;
-
-  const controller = new AbortController();
-  const timeout = globalThis.setTimeout(() => controller.abort(), JWKS_FETCH_TIMEOUT_MS);
-  let response: Response;
-  try {
-    response = await fetch(uri, {
-      method: "GET",
-      headers: { accept: "application/json" },
-      redirect: "error",
-      cache: "no-store",
-      credentials: "omit",
-      signal: controller.signal,
-    });
-  } finally {
-    globalThis.clearTimeout(timeout);
-  }
-  if (!response.ok) throw new Error("jwks_http_failure");
-  const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase();
-  if (contentType !== "application/json") throw new Error("jwks_content_type_invalid");
-
-  const bytes = await readBoundedResponse(response, MAX_JWKS_BYTES);
+function parseJwks(bytes: Uint8Array): JsonWebKey[] {
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -347,14 +337,46 @@ async function fetchJwks(uri: string, forceRefresh: boolean): Promise<JsonWebKey
   if (!Array.isArray(keys) || keys.length === 0 || keys.length > MAX_JWKS_KEYS) {
     throw new Error("jwks_key_count_invalid");
   }
-  const parsedKeys = keys.map((value) => {
+  return keys.map((value) => {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       throw new Error("jwks_key_invalid");
     }
     return value as JsonWebKey;
   });
-  jwksCache.set(uri, { keys: parsedKeys, expiresAt: Date.now() + JWKS_CACHE_MS });
-  return parsedKeys;
+}
+
+async function fetchJwks(uri: string, forceRefresh: boolean): Promise<JsonWebKey[]> {
+  const cached = jwksCache.get(uri);
+  if (!forceRefresh && cached && Date.now() < cached.expiresAt) return cached.keys;
+
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), JWKS_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(uri, {
+      method: "GET",
+      headers: { accept: "application/json" },
+      redirect: "error",
+      cache: "no-store",
+      credentials: "omit",
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error("jwks_http_failure");
+    const contentType = response.headers
+      .get("content-type")
+      ?.split(";", 1)[0]
+      ?.trim()
+      .toLowerCase();
+    if (contentType !== "application/json") throw new Error("jwks_content_type_invalid");
+
+    const keys = parseJwks(await readBoundedResponse(response, MAX_JWKS_BYTES));
+    jwksCache.set(uri, { keys, expiresAt: Date.now() + JWKS_CACHE_MS });
+    return keys;
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("jwks_request_timeout");
+    throw error;
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
 }
 
 function selectJwk(keys: JsonWebKey[], kid: string, algorithm: ApprovedAlgorithm): JsonWebKey {
@@ -455,6 +477,14 @@ function validateClaims(
     clientId,
     expiresAt,
   };
+}
+
+export function isAccessTokenConfigurationError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : "";
+  return (
+    message.startsWith("Supabase server configuration") ||
+    CONFIGURATION_ERROR_PREFIXES.some((prefix) => message.startsWith(prefix))
+  );
 }
 
 export async function verifySupabaseAccessToken(
