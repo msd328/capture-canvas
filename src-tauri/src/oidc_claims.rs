@@ -56,10 +56,6 @@ impl UnverifiedIdTokenClaims {
 struct SecretBytes(Vec<u8>);
 
 impl SecretBytes {
-    fn from_slice(value: &[u8]) -> Self {
-        Self(value.to_vec())
-    }
-
     fn expose(&self) -> &[u8] {
         &self.0
     }
@@ -126,7 +122,7 @@ fn configured_client_id() -> Result<&'static str, String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "OIDC client ID is not configured in this build".to_string())?;
-    validate_text(client_id, 1, MAX_CLIENT_ID_BYTES, "client_id")
+    validate_text(client_id, 1, MAX_CLIENT_ID_BYTES)
         .map_err(|_| "OIDC client ID configuration is invalid".to_string())?;
     Ok(client_id)
 }
@@ -141,13 +137,8 @@ fn validate_claims_at(
     if id_token.is_empty() || id_token.len() > MAX_ID_TOKEN_BYTES {
         return Err("token_size_invalid");
     }
-    validate_text(expected_issuer, 1, MAX_ISSUER_BYTES, "issuer_config")?;
-    validate_text(
-        expected_client_id,
-        1,
-        MAX_CLIENT_ID_BYTES,
-        "client_id_config",
-    )?;
+    validate_text(expected_issuer, 1, MAX_ISSUER_BYTES)?;
+    validate_text(expected_client_id, 1, MAX_CLIENT_ID_BYTES)?;
     if expected_nonce.is_empty() || expected_nonce.len() > MAX_NONCE_BYTES {
         return Err("expected_nonce_invalid");
     }
@@ -157,7 +148,7 @@ fn validate_claims_at(
     let raw = RawIdTokenClaims::deserialize(&mut deserializer).map_err(|_| "json_invalid")?;
     deserializer.end().map_err(|_| "trailing_data")?;
 
-    validate_text(&raw.iss, 1, MAX_ISSUER_BYTES, "issuer")?;
+    validate_text(&raw.iss, 1, MAX_ISSUER_BYTES)?;
     if raw.iss != expected_issuer {
         return Err("issuer_mismatch");
     }
@@ -169,7 +160,7 @@ fn validate_claims_at(
         return Err("subject_not_canonical");
     }
 
-    validate_text(&raw.nonce, 1, MAX_NONCE_BYTES, "nonce")?;
+    validate_text(&raw.nonce, 1, MAX_NONCE_BYTES)?;
     if !constant_time_eq(raw.nonce.as_bytes(), expected_nonce) {
         return Err("nonce_mismatch");
     }
@@ -239,7 +230,7 @@ fn validate_audience(
 
     let mut unique = HashSet::with_capacity(values.len());
     for value in &values {
-        validate_text(value, 1, MAX_CLIENT_ID_BYTES, "audience")?;
+        validate_text(value, 1, MAX_CLIENT_ID_BYTES)?;
         if !unique.insert(*value) {
             return Err("audience_duplicate");
         }
@@ -249,7 +240,7 @@ fn validate_audience(
     }
 
     if let Some(value) = authorized_party {
-        validate_text(value, 1, MAX_CLIENT_ID_BYTES, "authorized_party")?;
+        validate_text(value, 1, MAX_CLIENT_ID_BYTES)?;
         if value != expected_client_id {
             return Err("authorized_party_mismatch");
         }
@@ -290,12 +281,7 @@ fn validate_timestamps(raw: &RawIdTokenClaims, now: i64) -> Result<(), &'static 
     Ok(())
 }
 
-fn validate_text(
-    value: &str,
-    minimum: usize,
-    maximum: usize,
-    _field: &'static str,
-) -> Result<(), &'static str> {
+fn validate_text(value: &str, minimum: usize, maximum: usize) -> Result<(), &'static str> {
     if value.len() < minimum
         || value.len() > maximum
         || value
@@ -393,6 +379,8 @@ mod tests {
     #[test]
     fn expired_future_and_excessive_lifetime_tokens_are_rejected() {
         let mut payload = valid_payload();
+        payload["iat"] = json!(NOW - 3_600);
+        payload["auth_time"] = json!(NOW - 3_610);
         payload["exp"] = json!(NOW - CLOCK_SKEW_SECONDS);
         assert_eq!(
             validate_claims_at(&token(payload), NONCE, ISSUER, CLIENT_ID, NOW),
