@@ -64,8 +64,7 @@ function parseTrustedUrl(raw: string, field: "url" | "issuer"): URL {
   }
 
   const trustedTransport =
-    url.protocol === "https:" ||
-    (url.protocol === "http:" && isNumericLoopback(url.hostname));
+    url.protocol === "https:" || (url.protocol === "http:" && isNumericLoopback(url.hostname));
   if (!trustedTransport) {
     throw new SupabaseConfigError(`${field}_transport`);
   }
@@ -118,10 +117,7 @@ function fromEnvironment(env: unknown): SupabaseServerConfig | null {
   if (url.pathname !== "/") {
     throw new SupabaseConfigError("url_path");
   }
-  if (
-    authIssuer.origin !== url.origin ||
-    authIssuer.pathname.replace(/\/$/, "") !== "/auth/v1"
-  ) {
+  if (authIssuer.origin !== url.origin || authIssuer.pathname.replace(/\/$/, "") !== "/auth/v1") {
     throw new SupabaseConfigError("issuer_mismatch");
   }
 
