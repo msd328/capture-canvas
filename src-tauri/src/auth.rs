@@ -36,9 +36,19 @@ struct PendingOidcTransaction {
     expires_at: DateTime<Utc>,
 }
 
-struct ConsumedOidcTransaction {
-    nonce: String,
+pub(crate) struct OidcExchangeMaterial {
+    nonce: SecretBytes,
     code_verifier: SecretBytes,
+}
+
+impl OidcExchangeMaterial {
+    pub(crate) fn nonce(&self) -> &[u8] {
+        self.nonce.expose()
+    }
+
+    pub(crate) fn code_verifier(&self) -> &[u8] {
+        self.code_verifier.expose()
+    }
 }
 
 struct SecretBytes(Vec<u8>);
@@ -66,10 +76,20 @@ impl Drop for SecretBytes {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum OidcConsumeError {
+pub(crate) enum OidcConsumeError {
     Missing,
     Expired,
     StateMismatch,
+}
+
+impl OidcConsumeError {
+    pub(crate) fn code(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::Expired => "expired",
+            Self::StateMismatch => "state_mismatch",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -177,9 +197,9 @@ impl AuthState {
 
     fn consume_oidc_state(
         &mut self,
-        supplied_state: &str,
+        supplied_state: &[u8],
         now: Instant,
-    ) -> Result<ConsumedOidcTransaction, OidcConsumeError> {
+    ) -> Result<OidcExchangeMaterial, OidcConsumeError> {
         let Some(pending) = self.pending_oidc.as_ref() else {
             return Err(OidcConsumeError::Missing);
         };
@@ -189,15 +209,15 @@ impl AuthState {
             return Err(OidcConsumeError::Expired);
         }
 
-        if !constant_time_eq(pending.state.as_bytes(), supplied_state.as_bytes()) {
+        if !constant_time_eq(pending.state.as_bytes(), supplied_state) {
             return Err(OidcConsumeError::StateMismatch);
         }
 
         let Some(pending) = self.pending_oidc.take() else {
             return Err(OidcConsumeError::Missing);
         };
-        Ok(ConsumedOidcTransaction {
-            nonce: pending.nonce,
+        Ok(OidcExchangeMaterial {
+            nonce: SecretBytes::new(pending.nonce),
             code_verifier: pending.code_verifier,
         })
     }
@@ -328,6 +348,29 @@ impl SecureAuthStore {
         eprintln!("[Recorder][AuthHealth] stage=oidc_cancel ok=true had_pending={had_pending}");
     }
 
+    pub(crate) fn take_oidc_exchange_material(
+        &self,
+        supplied_state: &[u8],
+    ) -> Result<OidcExchangeMaterial, OidcConsumeError> {
+        let mut state = self.state.lock();
+        let result = state.consume_oidc_state(supplied_state, Instant::now());
+        match result {
+            Ok(material) => {
+                eprintln!(
+                    "[Recorder][AuthHealth] stage=oidc_pkce_take ok=true nonce_kept_native=true verifier_kept_native=true replay_rejected=true"
+                );
+                Ok(material)
+            }
+            Err(error) => {
+                eprintln!(
+                    "[Recorder][AuthHealth] stage=oidc_pkce_take ok=false code={}",
+                    error.code()
+                );
+                Err(error)
+            }
+        }
+    }
+
     /// Exercise the PKCE/state lifecycle without contacting an identity provider
     /// and without mutating a real pending login transaction.
     pub fn probe_oidc_transaction(&self) -> OidcTransactionProbe {
@@ -336,20 +379,20 @@ impl SecureAuthStore {
         let mut probe_state = AuthState::default();
         let preparation = probe_state.begin_oidc_transaction(now, Utc::now());
 
-        let consumed = probe_state.consume_oidc_state(&preparation.state, now);
+        let consumed = probe_state.consume_oidc_state(preparation.state.as_bytes(), now);
         let (state_round_trip_ok, nonce_retained, s256_ready) = match consumed.as_ref() {
             Ok(transaction) => (
                 true,
-                constant_time_eq(transaction.nonce.as_bytes(), preparation.nonce.as_bytes()),
+                constant_time_eq(transaction.nonce(), preparation.nonce.as_bytes()),
                 constant_time_eq(
-                    pkce_s256_challenge(transaction.code_verifier.expose()).as_bytes(),
+                    pkce_s256_challenge(transaction.code_verifier()).as_bytes(),
                     preparation.code_challenge.as_bytes(),
                 ),
             ),
             Err(_) => (false, false, false),
         };
         let replay_rejected = matches!(
-            probe_state.consume_oidc_state(&preparation.state, now),
+            probe_state.consume_oidc_state(preparation.state.as_bytes(), now),
             Err(OidcConsumeError::Missing)
         );
         let ok = state_round_trip_ok && nonce_retained && s256_ready && replay_rejected;
@@ -720,18 +763,18 @@ mod tests {
         let preparation = state.begin_oidc_transaction(now, Utc::now());
 
         let consumed = state
-            .consume_oidc_state(&preparation.state, now)
+            .consume_oidc_state(preparation.state.as_bytes(), now)
             .expect("matching state should consume the transaction");
         assert!(constant_time_eq(
-            consumed.nonce.as_bytes(),
+            consumed.nonce(),
             preparation.nonce.as_bytes()
         ));
         assert_eq!(
-            pkce_s256_challenge(consumed.code_verifier.expose()),
+            pkce_s256_challenge(consumed.code_verifier()),
             preparation.code_challenge
         );
         assert!(matches!(
-            state.consume_oidc_state(&preparation.state, now),
+            state.consume_oidc_state(preparation.state.as_bytes(), now),
             Err(OidcConsumeError::Missing)
         ));
     }
@@ -743,11 +786,13 @@ mod tests {
         let preparation = state.begin_oidc_transaction(now, Utc::now());
 
         assert!(matches!(
-            state.consume_oidc_state("different-state", now),
+            state.consume_oidc_state(b"different-state", now),
             Err(OidcConsumeError::StateMismatch)
         ));
         assert!(state.oidc_status(now).pending);
-        assert!(state.consume_oidc_state(&preparation.state, now).is_ok());
+        assert!(state
+            .consume_oidc_state(preparation.state.as_bytes(), now)
+            .is_ok());
     }
 
     #[test]
@@ -757,7 +802,10 @@ mod tests {
         let preparation = state.begin_oidc_transaction(now, Utc::now());
 
         assert!(matches!(
-            state.consume_oidc_state(&preparation.state, now + OIDC_TRANSACTION_TTL),
+            state.consume_oidc_state(
+                preparation.state.as_bytes(),
+                now + OIDC_TRANSACTION_TTL
+            ),
             Err(OidcConsumeError::Expired)
         ));
         assert!(!state.oidc_status(now + OIDC_TRANSACTION_TTL).pending);
