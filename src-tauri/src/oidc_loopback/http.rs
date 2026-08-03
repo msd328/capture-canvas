@@ -99,9 +99,7 @@ pub(super) fn handle_connection(
                         "Sign-in was not completed",
                         "Return to Recorder to try again.",
                     )?;
-                    eprintln!(
-                        "[Recorder][AuthHealth] stage=oidc_callback_provider_error ok=true"
-                    );
+                    eprintln!("[Recorder][AuthHealth] stage=oidc_callback_provider_error ok=true");
                     Ok(ConnectionOutcome::Complete)
                 }
                 Err(AcceptError::StateMismatch) => {
@@ -189,7 +187,7 @@ fn parse_callback_request(
         } else if name.eq_ignore_ascii_case("content-length") {
             if content_length.is_some() {
                 return Err(
-                    "Callback request contained multiple Content-Length headers".to_string(),
+                    "Callback request contained multiple Content-Length headers".to_string()
                 );
             }
             content_length = Some(
@@ -374,7 +372,8 @@ mod tests {
         let duplicate = b"GET /oidc/callback?code=abc&state=one&state=two HTTP/1.1\r\nHost: 127.0.0.1:43829\r\n\r\n";
         assert!(parse_callback_request(duplicate, &endpoint()).is_err());
 
-        let wrong_host = b"GET /oidc/callback?code=abc&state=one HTTP/1.1\r\nHost: 127.0.0.1:43830\r\n\r\n";
+        let wrong_host =
+            b"GET /oidc/callback?code=abc&state=one HTTP/1.1\r\nHost: 127.0.0.1:43830\r\n\r\n";
         assert!(parse_callback_request(wrong_host, &endpoint()).is_err());
     }
 
