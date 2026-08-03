@@ -2,6 +2,7 @@ use crate::{
     auth::{OidcTransactionProbe, SecureAuthProbe, SecureAuthStatus},
     oidc_exchange::{OidcExchangeContractStatus, OidcExchangeProbe},
     oidc_loopback::{OidcCallbackStatus, OidcSignInLaunch},
+    oidc_session::NativeOidcSessionStatus,
     state::AppState,
 };
 use serde::Serialize;
@@ -50,7 +51,12 @@ pub async fn clear_secure_auth_session(state: State<'_, AppState>) -> Result<(),
     let store = state.auth.clone();
     tauri::async_runtime::spawn_blocking(move || {
         crate::oidc_loopback::cancel_callback();
-        store.clear()
+        let memory_session_cleared = crate::oidc_session::clear();
+        store.clear()?;
+        eprintln!(
+            "[Recorder][AuthHealth] stage=oidc_session_clear ok=true memory_session_cleared={memory_session_cleared} secure_store_cleared=true"
+        );
+        Ok(())
     })
     .await
     .map_err(|error| worker_error("clear", error))?
@@ -79,9 +85,17 @@ pub async fn get_oidc_client_status() -> Result<OidcClientReadiness, String> {
 
 #[tauri::command]
 pub async fn get_oidc_exchange_contract_status() -> Result<OidcExchangeContractStatus, String> {
-    tauri::async_runtime::spawn_blocking(crate::oidc_exchange::status)
-        .await
-        .map_err(|error| worker_error("OIDC exchange contract status", error))?
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut status = crate::oidc_exchange::status()?;
+        status.network_exchange_enabled = true;
+        status.identity_validation_enabled = true;
+        eprintln!(
+            "[Recorder][AuthHealth] stage=oidc_exchange_command_surface ok=true network_exchange=true identity_validation=true webview_token_input=false"
+        );
+        Ok(status)
+    })
+    .await
+    .map_err(|error| worker_error("OIDC exchange contract status", error))?
 }
 
 #[tauri::command]
@@ -102,6 +116,39 @@ pub async fn get_oidc_callback_status() -> Result<OidcCallbackStatus, String> {
     tauri::async_runtime::spawn_blocking(crate::oidc_loopback::callback_status)
         .await
         .map_err(|error| worker_error("OIDC callback status", error))
+}
+
+#[tauri::command]
+pub async fn complete_oidc_sign_in(
+    state: State<'_, AppState>,
+) -> Result<NativeOidcSessionStatus, String> {
+    let store = state.auth.clone();
+    eprintln!(
+        "[Recorder][AuthHealth] stage=oidc_sign_in_complete_start ok=true webview_token_input=false"
+    );
+    let result = crate::oidc_session::establish_verified_session(&store).await;
+    match result {
+        Ok(status) => {
+            eprintln!(
+                "[Recorder][AuthHealth] stage=oidc_sign_in_complete ok=true active={} refresh_token_persisted={} paid_access_granted=false",
+                status.active, status.refresh_token_persisted
+            );
+            Ok(status)
+        }
+        Err(error) => {
+            eprintln!(
+                "[Recorder][AuthHealth] stage=oidc_sign_in_complete ok=false active=false refresh_token_persisted=false paid_access_granted=false"
+            );
+            Err(error)
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn get_oidc_session_status() -> Result<NativeOidcSessionStatus, String> {
+    tauri::async_runtime::spawn_blocking(crate::oidc_session::status)
+        .await
+        .map_err(|error| worker_error("OIDC session status", error))
 }
 
 #[tauri::command]
