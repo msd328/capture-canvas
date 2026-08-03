@@ -196,9 +196,13 @@ function SettingsPage() {
         exchange.duplicateFieldRejected &&
         exchange.unknownFieldRejected &&
         exchange.oversizedResponseRejected &&
+        exchange.transportClientOk &&
+        exchange.strictJsonHeadersOk &&
+        exchange.redirectResponseRejected &&
+        exchange.oversizedDeclaredResponseRejected &&
         exchange.secretsKeptNative;
       if (passed) {
-        toast.success("PKCE, one-time state, and token exchange contract checks passed");
+        toast.success("PKCE, one-time state, and bounded token transport checks passed");
       } else {
         toast.error("Sign-in security checks did not pass");
       }
@@ -311,9 +315,10 @@ function SettingsPage() {
         : "Token exchange provider not configured";
   const exchangeStatusDescription = oidcExchangeError
     ? "Recorder will not process provider tokens until the native contract can be checked."
-    : oidcExchangeStatus?.strictResponseParser
-      ? "Public-client request encoding and strict bounded response parsing are available. Network exchange and signed identity validation remain disabled."
-      : "Native token response validation is unavailable.";
+    : oidcExchangeStatus?.strictResponseParser &&
+        oidcExchangeStatus.boundedHttpsTransportSupported
+      ? `Public-client encoding, strict bounded JSON parsing, and a ${oidcExchangeStatus.totalTimeoutSeconds}-second HTTPS transport are ready. Live exchange remains disabled until signed identity validation is enabled.`
+      : "Native token response validation or bounded HTTPS transport is unavailable.";
   const callbackStatusText = describeCallbackStatus(oidcCallbackStatus);
   const canStartCloudSignIn =
     oidcClientStatus?.configured === true &&
@@ -442,8 +447,9 @@ function SettingsPage() {
             <p className="text-xs text-muted-foreground">
               Provider metadata is accepted only from compile-time settings. A configured numeric
               loopback callback can open the system browser and receive one bounded response. Native
-              request encoding and token-response parsing are implemented, but code/verifier
-              handoff, HTTPS exchange, signed-token validation, and account creation remain disabled.
+              code/verifier/nonce handoff, request encoding, strict token-response parsing, and
+              bounded HTTPS transport are implemented. Live exchange, signed-token validation, and
+              account creation remain disabled.
             </p>
             <div className="flex flex-wrap justify-end gap-2">
               {authStatus?.signedIn ? (
@@ -531,7 +537,13 @@ function describeCallbackStatus(
       return {
         title: "Authorization response captured",
         description:
-          "The one-time code is held only in native memory. Native code/verifier handoff is not enabled yet.",
+          "The one-time code is held only in native memory. Live token exchange remains gated on signed identity validation.",
+      };
+    case "grantTaken":
+      return {
+        title: "Authorization material consumed",
+        description:
+          "The private native code/verifier/nonce handoff completed. No signed-in session exists until token validation succeeds.",
       };
     case "providerError":
       return {
