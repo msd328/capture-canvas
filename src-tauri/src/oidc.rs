@@ -170,9 +170,7 @@ impl OidcClientConfig {
 pub fn client_status() -> Result<OidcClientStatus, String> {
     match OidcClientConfig::from_build() {
         Ok(None) => {
-            eprintln!(
-                "[Recorder][AuthHealth] stage=oidc_client_config ok=true configured=false"
-            );
+            eprintln!("[Recorder][AuthHealth] stage=oidc_client_config ok=true configured=false");
             Ok(OidcClientStatus {
                 configured: false,
                 authorization_endpoint_https: false,
@@ -206,9 +204,7 @@ pub fn client_status() -> Result<OidcClientStatus, String> {
     }
 }
 
-pub fn prepare_authorization(
-    store: &SecureAuthStore,
-) -> Result<OidcAuthorizationRequest, String> {
+pub fn prepare_authorization(store: &SecureAuthStore) -> Result<OidcAuthorizationRequest, String> {
     let config = match OidcClientConfig::from_build() {
         Ok(Some(config)) => config,
         Ok(None) => {
@@ -451,8 +447,14 @@ mod tests {
         let parameters: std::collections::HashMap<_, _> =
             parsed.query_pairs().into_owned().collect();
 
-        assert_eq!(parameters.get("response_type").map(String::as_str), Some("code"));
-        assert_eq!(parameters.get("response_mode").map(String::as_str), Some("query"));
+        assert_eq!(
+            parameters.get("response_type").map(String::as_str),
+            Some("code")
+        );
+        assert_eq!(
+            parameters.get("response_mode").map(String::as_str),
+            Some("query")
+        );
         assert_eq!(
             parameters.get("client_id").map(String::as_str),
             Some("recorder desktop client")
@@ -461,8 +463,14 @@ mod tests {
             parameters.get("redirect_uri").map(String::as_str),
             Some("capture-canvas://auth/callback")
         );
-        assert_eq!(parameters.get("state").map(String::as_str), Some("state-value"));
-        assert_eq!(parameters.get("nonce").map(String::as_str), Some("nonce-value"));
+        assert_eq!(
+            parameters.get("state").map(String::as_str),
+            Some("state-value")
+        );
+        assert_eq!(
+            parameters.get("nonce").map(String::as_str),
+            Some("nonce-value")
+        );
         assert_eq!(
             parameters.get("code_challenge").map(String::as_str),
             Some("challenge-value")
