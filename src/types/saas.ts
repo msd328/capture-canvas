@@ -22,6 +22,28 @@ export interface OidcClientStatus {
   jwksUriHttps: boolean;
 }
 
+export interface OidcExchangeContractStatus {
+  configured: boolean;
+  publicClient: boolean;
+  authorizationCodeFormSupported: boolean;
+  refreshTokenFormSupported: boolean;
+  strictResponseParser: boolean;
+  networkExchangeEnabled: boolean;
+  identityValidationEnabled: boolean;
+  maxRequestBytes: number;
+  maxResponseBytes: number;
+}
+
+export interface OidcExchangeProbe {
+  authorizationCodeFormOk: boolean;
+  refreshTokenFormOk: boolean;
+  tokenResponseOk: boolean;
+  duplicateFieldRejected: boolean;
+  unknownFieldRejected: boolean;
+  oversizedResponseRejected: boolean;
+  secretsKeptNative: boolean;
+}
+
 export interface OidcSignInLaunch {
   launched: boolean;
   callbackMode: "loopback";
