@@ -77,9 +77,7 @@ pub async fn get_oidc_client_status() -> Result<OidcClientReadiness, String> {
 }
 
 #[tauri::command]
-pub async fn start_oidc_sign_in(
-    state: State<'_, AppState>,
-) -> Result<OidcSignInLaunch, String> {
+pub async fn start_oidc_sign_in(state: State<'_, AppState>) -> Result<OidcSignInLaunch, String> {
     let store = state.auth.clone();
     tauri::async_runtime::spawn_blocking(move || {
         // Do not create a real PKCE transaction or open the browser unless the
