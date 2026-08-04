@@ -100,3 +100,35 @@ export interface OidcTransactionProbe {
   replayRejected: boolean;
   verifierKeptNative: boolean;
 }
+
+export type AccountStatus = "active" | "disabled" | "deletion_pending";
+export type BillingProvider = "stripe" | "paypal" | "phonepe";
+export type SubscriptionStatus =
+  | "pending"
+  | "active"
+  | "grace_period"
+  | "past_due"
+  | "suspended"
+  | "cancelled"
+  | "expired";
+
+export interface NativeSubscriptionAccess {
+  provider: BillingProvider;
+  status: SubscriptionStatus;
+  currentPeriodEnd: string | null;
+}
+
+export interface NativeAccountAccessStatus {
+  configured: boolean;
+  endpointHttps: boolean;
+  loopbackDevelopment: boolean;
+  checked: boolean;
+  authenticated: boolean;
+  accountStatus: AccountStatus | null;
+  subscription: NativeSubscriptionAccess | null;
+  entitlementCount: number;
+  fullAccess: boolean;
+  checkedAt: string | null;
+  validUntil: string | null;
+  accessTokenNativeOnly: boolean;
+}
