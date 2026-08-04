@@ -69,6 +69,7 @@ const emptyOidcSession = async (): Promise<NativeOidcSessionStatus> => ({
   refreshTokenPersisted: false,
   reconciliationComplete: true,
   refreshCredentialPresent: false,
+  refreshCredentialInvalid: false,
   legacyRefreshCredentialPresent: false,
   restorationRequired: false,
   restorationAttempted: false,
