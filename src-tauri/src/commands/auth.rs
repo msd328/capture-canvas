@@ -2,7 +2,7 @@ use crate::{
     auth::{OidcTransactionProbe, SecureAuthProbe, SecureAuthStatus},
     oidc_exchange::{OidcExchangeContractStatus, OidcExchangeProbe},
     oidc_loopback::{OidcCallbackStatus, OidcSignInLaunch},
-    oidc_session::NativeOidcSessionStatus,
+    oidc_reconcile::NativeOidcSessionOverview,
     state::AppState,
 };
 use serde::Serialize;
@@ -52,11 +52,25 @@ pub async fn clear_secure_auth_session(state: State<'_, AppState>) -> Result<(),
     tauri::async_runtime::spawn_blocking(move || {
         crate::oidc_loopback::cancel_callback();
         let memory_session_cleared = crate::oidc_session::clear();
-        store.clear()?;
+        let refresh_result = crate::oidc_reconcile::clear_persisted_refresh_credential();
+        let legacy_result = store.clear();
+        let refresh_credential_cleared = refresh_result.is_ok();
+        let legacy_store_cleared = legacy_result.is_ok();
+
+        if refresh_credential_cleared && legacy_store_cleared {
+            eprintln!(
+                "[Recorder][AuthHealth] stage=oidc_session_clear ok=true memory_session_cleared={memory_session_cleared} refresh_credential_cleared=true legacy_store_cleared=true"
+            );
+            return Ok(());
+        }
+
         eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_session_clear ok=true memory_session_cleared={memory_session_cleared} secure_store_cleared=true"
+            "[Recorder][AuthHealth] stage=oidc_session_clear ok=false memory_session_cleared={memory_session_cleared} refresh_credential_cleared={refresh_credential_cleared} legacy_store_cleared={legacy_store_cleared}"
         );
-        Ok(())
+        Err(refresh_result
+            .err()
+            .or_else(|| legacy_result.err())
+            .unwrap_or_else(|| "Unable to clear the native cloud session".to_string()))
     })
     .await
     .map_err(|error| worker_error("clear", error))?
@@ -102,8 +116,6 @@ pub async fn get_oidc_exchange_contract_status() -> Result<OidcExchangeContractS
 pub async fn start_oidc_sign_in(state: State<'_, AppState>) -> Result<OidcSignInLaunch, String> {
     let store = state.auth.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // Do not create a real PKCE transaction or open the browser unless the
-        // complete token endpoint/issuer/audience/JWKS trust contract is pinned.
         let _token_config = crate::oidc_token::require_configured()?;
         crate::oidc_loopback::start_sign_in(&store)
     })
@@ -121,7 +133,7 @@ pub async fn get_oidc_callback_status() -> Result<OidcCallbackStatus, String> {
 #[tauri::command]
 pub async fn complete_oidc_sign_in(
     state: State<'_, AppState>,
-) -> Result<NativeOidcSessionStatus, String> {
+) -> Result<NativeOidcSessionOverview, String> {
     let store = state.auth.clone();
     eprintln!(
         "[Recorder][AuthHealth] stage=oidc_sign_in_complete_start ok=true webview_token_input=false"
@@ -129,11 +141,12 @@ pub async fn complete_oidc_sign_in(
     let result = crate::oidc_session::establish_verified_session(&store).await;
     match result {
         Ok(status) => {
+            let overview = crate::oidc_reconcile::reconcile_and_status()?;
             eprintln!(
-                "[Recorder][AuthHealth] stage=oidc_sign_in_complete ok=true active={} refresh_token_persisted={} paid_access_granted=false",
-                status.active, status.refresh_token_persisted
+                "[Recorder][AuthHealth] stage=oidc_sign_in_complete ok=true active={} refresh_token_persisted={} restoration_required={} paid_access_granted=false",
+                status.active, status.refresh_token_persisted, overview.restoration_required
             );
-            Ok(status)
+            Ok(overview)
         }
         Err(error) => {
             eprintln!(
@@ -145,10 +158,10 @@ pub async fn complete_oidc_sign_in(
 }
 
 #[tauri::command]
-pub async fn get_oidc_session_status() -> Result<NativeOidcSessionStatus, String> {
-    tauri::async_runtime::spawn_blocking(crate::oidc_session::status)
+pub async fn get_oidc_session_status() -> Result<NativeOidcSessionOverview, String> {
+    tauri::async_runtime::spawn_blocking(crate::oidc_reconcile::reconcile_and_status)
         .await
-        .map_err(|error| worker_error("OIDC session status", error))
+        .map_err(|error| worker_error("OIDC session status", error))?
 }
 
 #[tauri::command]
