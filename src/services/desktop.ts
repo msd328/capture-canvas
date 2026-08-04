@@ -62,6 +62,20 @@ export function localFileUrl(filePath: string): string | null {
   return convert(filePath, "asset");
 }
 
+const emptyOidcSession = async (): Promise<NativeOidcSessionStatus> => ({
+  active: false,
+  expiresAt: null,
+  accessTokenNativeOnly: true,
+  refreshTokenPersisted: false,
+  reconciliationComplete: true,
+  refreshCredentialPresent: false,
+  legacyRefreshCredentialPresent: false,
+  restorationRequired: false,
+  restorationAttempted: false,
+  restorationFailed: false,
+  automaticRestorationEnabled: false,
+});
+
 export const getSecureAuthStatus = () =>
   call<SecureAuthStatus>("get_secure_auth_status", undefined, async () => ({
     supported: false,
@@ -117,12 +131,9 @@ export const getOidcCallbackStatus = () =>
   }));
 export const completeOidcSignIn = () => call<NativeOidcSessionStatus>("complete_oidc_sign_in");
 export const getOidcSessionStatus = () =>
-  call<NativeOidcSessionStatus>("get_oidc_session_status", undefined, async () => ({
-    active: false,
-    expiresAt: null,
-    accessTokenNativeOnly: true,
-    refreshTokenPersisted: false,
-  }));
+  call<NativeOidcSessionStatus>("get_oidc_session_status", undefined, emptyOidcSession);
+export const restoreOidcSession = () =>
+  call<NativeOidcSessionStatus>("restore_oidc_session", undefined, emptyOidcSession);
 export const cancelOidcTransaction = () =>
   call<void>("cancel_oidc_transaction", undefined, async () => undefined);
 export const probeOidcTransaction = () =>
