@@ -52,12 +52,13 @@ pub async fn clear_secure_auth_session(state: State<'_, AppState>) -> Result<(),
     tauri::async_runtime::spawn_blocking(move || {
         crate::oidc_loopback::cancel_callback();
         let memory_session_cleared = crate::oidc_session::clear();
-        let refresh_result = crate::oidc_reconcile::clear_persisted_refresh_credential();
+        let refresh_result = crate::oidc_refresh::clear_persisted_refresh_credentials();
         let legacy_result = store.clear();
         let refresh_credential_cleared = refresh_result.is_ok();
         let legacy_store_cleared = legacy_result.is_ok();
 
         if refresh_credential_cleared && legacy_store_cleared {
+            crate::oidc_reconcile::reset_restoration_state();
             eprintln!(
                 "[Recorder][AuthHealth] stage=oidc_session_clear ok=true memory_session_cleared={memory_session_cleared} refresh_credential_cleared=true legacy_store_cleared=true"
             );
@@ -104,7 +105,7 @@ pub async fn get_oidc_exchange_contract_status() -> Result<OidcExchangeContractS
         status.network_exchange_enabled = true;
         status.identity_validation_enabled = true;
         eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_exchange_command_surface ok=true network_exchange=true identity_validation=true webview_token_input=false"
+            "[Recorder][AuthHealth] stage=oidc_exchange_command_surface ok=true network_exchange=true identity_validation=true refresh_rotation=true startup_restoration=true webview_token_input=false"
         );
         Ok(status)
     })
@@ -141,6 +142,7 @@ pub async fn complete_oidc_sign_in(
     let result = crate::oidc_session::establish_verified_session(&store).await;
     match result {
         Ok(status) => {
+            crate::oidc_reconcile::reset_restoration_state();
             let overview = crate::oidc_reconcile::reconcile_and_status()?;
             eprintln!(
                 "[Recorder][AuthHealth] stage=oidc_sign_in_complete ok=true active={} refresh_token_persisted={} restoration_required={} paid_access_granted=false",
@@ -162,6 +164,14 @@ pub async fn get_oidc_session_status() -> Result<NativeOidcSessionOverview, Stri
     tauri::async_runtime::spawn_blocking(crate::oidc_reconcile::reconcile_and_status)
         .await
         .map_err(|error| worker_error("OIDC session status", error))?
+}
+
+#[tauri::command]
+pub async fn restore_oidc_session() -> Result<NativeOidcSessionOverview, String> {
+    eprintln!(
+        "[Recorder][AuthHealth] stage=oidc_restore_command_start ok=true webview_token_input=false"
+    );
+    crate::oidc_reconcile::restore_persisted_session().await
 }
 
 #[tauri::command]
