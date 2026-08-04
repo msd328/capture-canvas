@@ -16,7 +16,7 @@ use reqwest::{
     Client, Response, StatusCode,
 };
 use ring::signature;
-use serde::Deserialize;
+use serde::{de::IgnoredAny, Deserialize, Deserializer};
 use std::{
     collections::HashSet,
     sync::atomic::{compiler_fence, Ordering},
@@ -116,12 +116,20 @@ struct RawClaims {
     exp: i64,
     iat: i64,
     auth_time: i64,
-    #[serde(default)]
-    nonce: Option<String>,
+    #[serde(default, rename = "nonce", deserialize_with = "mark_present")]
+    nonce_present: bool,
     #[serde(default)]
     nbf: Option<i64>,
     #[serde(default)]
     azp: Option<String>,
+}
+
+fn mark_present<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let _ = IgnoredAny::deserialize(deserializer)?;
+    Ok(true)
 }
 
 #[derive(Deserialize)]
@@ -571,7 +579,7 @@ fn validate_claims(
     if raw.sub != subject.hyphenated().to_string() {
         return Err("subject_not_canonical");
     }
-    if raw.nonce.is_some() {
+    if raw.nonce_present {
         return Err("refresh_nonce_present");
     }
     validate_times(&raw, chrono::Utc::now().timestamp())?;
