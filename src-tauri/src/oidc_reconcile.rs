@@ -92,9 +92,7 @@ pub(crate) fn clear_persisted_refresh_credential() -> Result<bool, String> {
 
     #[cfg(not(windows))]
     {
-        eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_refresh_clear ok=false code=unsupported"
-        );
+        eprintln!("[Recorder][AuthHealth] stage=oidc_refresh_clear ok=false code=unsupported");
         Err("Native refresh credential storage is unavailable on this platform".to_string())
     }
 }
@@ -174,9 +172,7 @@ mod windows_store {
 
     fn operation_error(stage: &str, error: &windows::core::Error) -> String {
         let code = error.code().0;
-        eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_reconcile_store_{stage} ok=false code={code}"
-        );
+        eprintln!("[Recorder][AuthHealth] stage=oidc_reconcile_store_{stage} ok=false code={code}");
         format!("Windows refresh credential operation failed at {stage} (code {code})")
     }
 
@@ -262,6 +258,9 @@ mod tests {
         assert!(validate_refresh_token(b"valid.refresh"));
         assert!(!validate_refresh_token(b""));
         assert!(!validate_refresh_token(b"bad\nrefresh"));
-        assert!(!validate_refresh_token(&vec![b'x'; MAX_REFRESH_TOKEN_BYTES + 1]));
+        assert!(!validate_refresh_token(&vec![
+            b'x';
+            MAX_REFRESH_TOKEN_BYTES + 1
+        ]));
     }
 }
