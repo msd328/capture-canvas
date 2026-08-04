@@ -77,7 +77,8 @@ fn validate_recording_access(status: &NativeAccountAccessStatus) -> Result<(), &
     }
     if !status
         .valid_until
-        .is_some_and(|deadline| deadline > Utc::now())
+        .as_ref()
+        .is_some_and(|deadline| *deadline > Utc::now())
     {
         return Err("access_check_expired");
     }
