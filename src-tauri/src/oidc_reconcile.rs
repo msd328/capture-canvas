@@ -2,8 +2,8 @@
 //!
 //! Only a subject-bound v2 credential may enter the refresh flow. Restoration is
 //! serialized, cancellation-generation protected, and never treats durable storage
-//! alone as authentication. Legacy raw credentials remain visible for cleanup but
-//! are not exchanged automatically.
+//! alone as authentication. Legacy raw and malformed v2 credentials remain visible
+//! for cleanup but are not exchanged automatically.
 
 use crate::{
     oidc_refresh,
@@ -23,6 +23,7 @@ pub struct NativeOidcSessionOverview {
     pub refresh_token_persisted: bool,
     pub reconciliation_complete: bool,
     pub refresh_credential_present: bool,
+    pub refresh_credential_invalid: bool,
     pub legacy_refresh_credential_present: bool,
     pub restoration_required: bool,
     pub restoration_attempted: bool,
@@ -52,14 +53,17 @@ pub(crate) fn reconcile_and_status() -> Result<NativeOidcSessionOverview, String
     let state = *restoration_state().lock();
     let overview = overview(
         session,
+        stored.current_present,
         stored.credential.is_some(),
+        stored.current_invalid,
         stored.legacy_present,
         state,
     );
     eprintln!(
-        "[Recorder][AuthHealth] stage=oidc_startup_reconcile ok=true active={} refresh_present={} legacy_present={} restoration_required={} restoration_attempted={} restoration_failed={} automatic_refresh=true paid_access_granted=false",
+        "[Recorder][AuthHealth] stage=oidc_startup_reconcile ok=true active={} refresh_present={} refresh_invalid={} legacy_present={} restoration_required={} restoration_attempted={} restoration_failed={} automatic_refresh=true paid_access_granted=false",
         overview.active,
         overview.refresh_credential_present,
+        overview.refresh_credential_invalid,
         overview.legacy_refresh_credential_present,
         overview.restoration_required,
         overview.restoration_attempted,
@@ -102,12 +106,12 @@ pub(crate) async fn restore_persisted_session() -> Result<NativeOidcSessionOverv
         }
         Err(error) => {
             let active = oidc_session::status().active;
-            let credential_still_present = oidc_refresh::load_refresh_credential_state()
+            let credential_still_usable = oidc_refresh::load_refresh_credential_state()
                 .map(|state| state.credential.is_some())
                 .unwrap_or(true);
             {
                 let mut state = restoration_state().lock();
-                if active || !credential_still_present {
+                if active || !credential_still_usable {
                     *state = RestorationState::default();
                 } else {
                     state.attempted = true;
@@ -115,7 +119,7 @@ pub(crate) async fn restore_persisted_session() -> Result<NativeOidcSessionOverv
                 }
             }
             eprintln!(
-                "[Recorder][AuthHealth] stage=oidc_startup_restore ok=false active={active} refresh_rotated=false credential_still_present={credential_still_present} paid_access_granted=false"
+                "[Recorder][AuthHealth] stage=oidc_startup_restore ok=false active={active} refresh_rotated=false credential_still_usable={credential_still_usable} paid_access_granted=false"
             );
             if active {
                 return reconcile_and_status();
@@ -143,6 +147,8 @@ pub(crate) fn reset_restoration_state() {
 fn overview(
     session: NativeOidcSessionStatus,
     current_present: bool,
+    current_usable: bool,
+    current_invalid: bool,
     legacy_present: bool,
     restoration: RestorationState,
 ) -> NativeOidcSessionOverview {
@@ -153,8 +159,9 @@ fn overview(
         refresh_token_persisted: session.refresh_token_persisted,
         reconciliation_complete: true,
         refresh_credential_present: current_present || legacy_present,
+        refresh_credential_invalid: current_invalid,
         legacy_refresh_credential_present: legacy_present,
-        restoration_required: !session.active && current_present,
+        restoration_required: !session.active && current_usable,
         restoration_attempted: restoration.attempted,
         restoration_failed: restoration.failed,
         automatic_restoration_enabled: true,
@@ -179,6 +186,8 @@ mod tests {
         let status = overview(
             inactive_session(),
             true,
+            true,
+            false,
             false,
             RestorationState::default(),
         );
@@ -193,6 +202,8 @@ mod tests {
         let status = overview(
             inactive_session(),
             false,
+            false,
+            false,
             true,
             RestorationState::default(),
         );
@@ -202,10 +213,27 @@ mod tests {
     }
 
     #[test]
+    fn malformed_v2_is_visible_and_clearable_but_never_restorable() {
+        let status = overview(
+            inactive_session(),
+            true,
+            false,
+            true,
+            false,
+            RestorationState::default(),
+        );
+        assert!(status.refresh_credential_present);
+        assert!(status.refresh_credential_invalid);
+        assert!(!status.restoration_required);
+    }
+
+    #[test]
     fn failed_restore_is_non_secret_status_only() {
         let status = overview(
             inactive_session(),
             true,
+            true,
+            false,
             false,
             RestorationState {
                 attempted: true,
