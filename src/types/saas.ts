@@ -85,6 +85,7 @@ export interface NativeOidcSessionStatus {
   refreshTokenPersisted: boolean;
   reconciliationComplete: boolean;
   refreshCredentialPresent: boolean;
+  refreshCredentialInvalid: boolean;
   legacyRefreshCredentialPresent: boolean;
   restorationRequired: boolean;
   restorationAttempted: boolean;
