@@ -18,6 +18,7 @@ mod oidc_jwks;
 mod oidc_loopback;
 mod oidc_reconcile;
 mod oidc_refresh;
+mod oidc_refresh_flow;
 mod oidc_session;
 mod oidc_token;
 mod oidc_verify;
@@ -46,10 +47,10 @@ fn main() {
             // thread while the frontend is loading so Start remains responsive.
             encoding::warm_native_capture_pipeline_async();
 
-            // A persisted refresh credential is not an authenticated session. Inspect
-            // only its non-secret presence/shape on startup so the UI can distinguish
-            // "signed out" from "restoration required" without automatic network use.
-            oidc_reconcile::reconcile_async();
+            // A v2 subject-bound refresh credential may restore a native-only session
+            // through the pinned, bounded and signature-verified refresh flow. The
+            // serialized task never grants paid access and never exposes token bytes.
+            oidc_reconcile::restore_async();
             Ok(())
         })
         .manage(AppState::new())
@@ -63,6 +64,7 @@ fn main() {
             commands::auth::get_oidc_callback_status,
             commands::auth::complete_oidc_sign_in,
             commands::auth::get_oidc_session_status,
+            commands::auth::restore_oidc_session,
             commands::auth::cancel_oidc_transaction,
             commands::auth::probe_oidc_transaction,
             commands::auth::probe_oidc_exchange_contract,
