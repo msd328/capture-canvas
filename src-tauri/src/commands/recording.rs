@@ -1,4 +1,4 @@
-use crate::{recording::types::*, security, state::AppState};
+use crate::{paid_access_guard, recording::types::*, security, state::AppState};
 use serde::Serialize;
 use std::time::Instant;
 use tauri::State;
@@ -40,6 +40,10 @@ pub async fn start_recording(
                 return Err(error);
             }
         }
+    }
+    if let Err(error) = paid_access_guard::require_recording_start_access() {
+        log_control_failure("start", "paid_access", command_started);
+        return Err(error);
     }
     let validation_ms = validation_started.elapsed().as_millis();
 
