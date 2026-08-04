@@ -154,9 +154,16 @@ function SettingsPage() {
       .then(
         async (status) => {
           if (cancelled) return;
+          const [callbackStatus, secureStatus] = await Promise.all([
+            desktop.getOidcCallbackStatus(),
+            desktop.getSecureAuthStatus(),
+          ]);
+          if (cancelled) return;
           setOidcSessionStatus(status);
-          setOidcCallbackStatus(await desktop.getOidcCallbackStatus());
-          toast.success("Provider identity verified for this Recorder session");
+          setOidcCallbackStatus(callbackStatus);
+          setAuthStatus(secureStatus);
+          setAuthStatusError(false);
+          toast.success("Provider identity verified and refresh credential stored securely");
         },
         async (error) => {
           if (cancelled) return;
@@ -351,7 +358,7 @@ function SettingsPage() {
       ? "Checking native session…"
       : "No verified native session";
   const sessionStatusDescription = oidcSessionStatus?.active
-    ? `The access token is held only in native memory until ${formatSessionExpiry(oidcSessionStatus.expiresAt)}. Paid access has not been checked.`
+    ? `The access token is held only in native memory until ${formatSessionExpiry(oidcSessionStatus.expiresAt)}. ${oidcSessionStatus.refreshTokenPersisted ? "The refresh credential is stored in Windows Credential Manager." : "No durable refresh credential is stored."} Paid access has not been checked.`
     : "A successful provider exchange and signed ID-token verification are required. No paid access is granted locally.";
   const oidcStatusTitle = oidcClientError
     ? "OIDC build configuration is invalid"
@@ -378,7 +385,7 @@ function SettingsPage() {
         oidcExchangeStatus.identityValidationEnabled &&
         oidcExchangeStatus.strictResponseParser &&
         oidcExchangeStatus.boundedHttpsTransportSupported
-      ? `A ${oidcExchangeStatus.totalTimeoutSeconds}-second bounded HTTPS exchange, JWKS signature verification, and strict identity validation are enabled. Refresh persistence and paid-access authorization remain disabled.`
+      ? `A ${oidcExchangeStatus.totalTimeoutSeconds}-second bounded HTTPS exchange, JWKS signature verification, strict identity validation, and transactional Windows refresh persistence are enabled. Rotation, startup restoration, and paid-access authorization remain pending.`
       : "Native token exchange or signed identity validation is unavailable.";
   const callbackStatusText = describeCallbackStatus(oidcCallbackStatus, completingCloudSignIn);
   const canStartCloudSignIn =
@@ -516,8 +523,9 @@ function SettingsPage() {
             <p className="text-xs text-muted-foreground">
               Provider metadata is accepted only from compile-time settings. The WebView receives no
               authorization code, PKCE verifier, nonce, token, subject, issuer, audience, or key
-              material. A verified in-memory identity session still does not grant paid access;
-              Recorder must obtain that decision from the authenticated access API.
+              material. A verified native identity and securely stored refresh credential still do
+              not grant paid access; Recorder must obtain that decision from the authenticated
+              access API.
             </p>
             <div className="flex flex-wrap justify-end gap-2">
               {authStatus?.signedIn || oidcSessionStatus?.active ? (
