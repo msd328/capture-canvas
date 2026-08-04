@@ -16,6 +16,7 @@ mod oidc_claims;
 mod oidc_exchange;
 mod oidc_jwks;
 mod oidc_loopback;
+mod oidc_reconcile;
 mod oidc_refresh;
 mod oidc_session;
 mod oidc_token;
@@ -44,6 +45,11 @@ fn main() {
             // the first recording. Exercise the native H.264/AAC path in a background
             // thread while the frontend is loading so Start remains responsive.
             encoding::warm_native_capture_pipeline_async();
+
+            // A persisted refresh credential is not an authenticated session. Inspect
+            // only its non-secret presence/shape on startup so the UI can distinguish
+            // "signed out" from "restoration required" without automatic network use.
+            oidc_reconcile::reconcile_async();
             Ok(())
         })
         .manage(AppState::new())
