@@ -91,17 +91,35 @@ pub(crate) async fn restore_persisted_session() -> Result<NativeOidcSessionOverv
 
     match oidc_session::restore_verified_session(expected_generation, &credential).await {
         Ok(_) => {
-            restoration_state().lock().failed = false;
+            {
+                let mut state = restoration_state().lock();
+                state.failed = false;
+            }
             eprintln!(
                 "[Recorder][AuthHealth] stage=oidc_startup_restore ok=true active=true refresh_rotated=true subject_continuity=true paid_access_granted=false"
             );
             reconcile_and_status()
         }
         Err(error) => {
-            restoration_state().lock().failed = true;
+            let active = oidc_session::status().active;
+            let credential_still_present = oidc_refresh::load_refresh_credential_state()
+                .map(|state| state.credential.is_some())
+                .unwrap_or(true);
+            {
+                let mut state = restoration_state().lock();
+                if active || !credential_still_present {
+                    *state = RestorationState::default();
+                } else {
+                    state.attempted = true;
+                    state.failed = true;
+                }
+            }
             eprintln!(
-                "[Recorder][AuthHealth] stage=oidc_startup_restore ok=false active=false refresh_rotated=false paid_access_granted=false"
+                "[Recorder][AuthHealth] stage=oidc_startup_restore ok=false active={active} refresh_rotated=false credential_still_present={credential_still_present} paid_access_granted=false"
             );
+            if active {
+                return reconcile_and_status();
+            }
             Err(error)
         }
     }
