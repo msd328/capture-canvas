@@ -83,6 +83,9 @@ export interface NativeOidcSessionStatus {
   expiresAt: string | null;
   accessTokenNativeOnly: boolean;
   refreshTokenPersisted: boolean;
+  reconciliationComplete: boolean;
+  refreshCredentialPresent: boolean;
+  restorationRequired: boolean;
 }
 
 export interface OidcTransactionProbe {
