@@ -58,6 +58,7 @@ function SettingsPage() {
   const [checkingProviderConfiguration, setCheckingProviderConfiguration] = useState(false);
   const [startingCloudSignIn, setStartingCloudSignIn] = useState(false);
   const [completingCloudSignIn, setCompletingCloudSignIn] = useState(false);
+  const [restoringSession, setRestoringSession] = useState(false);
   const [cancellingCloudSignIn, setCancellingCloudSignIn] = useState(false);
   const [clearingSession, setClearingSession] = useState(false);
   const completionRequested = useRef(false);
@@ -184,6 +185,42 @@ function SettingsPage() {
     };
   }, [oidcCallbackStatus?.stage]);
 
+  useEffect(() => {
+    if (
+      !oidcSessionStatus?.automaticRestorationEnabled ||
+      !oidcSessionStatus.restorationRequired ||
+      oidcSessionStatus.restorationAttempted ||
+      restoringSession
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    setRestoringSession(true);
+    void desktop
+      .restoreOidcSession()
+      .then(
+        (status) => {
+          if (!cancelled) setOidcSessionStatus(status);
+        },
+        async () => {
+          if (!cancelled) setOidcSessionStatus(await desktop.getOidcSessionStatus());
+        },
+      )
+      .finally(() => {
+        if (!cancelled) setRestoringSession(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    oidcSessionStatus?.automaticRestorationEnabled,
+    oidcSessionStatus?.restorationAttempted,
+    oidcSessionStatus?.restorationRequired,
+    restoringSession,
+  ]);
+
   if (!settings) {
     return (
       <AppShell>
@@ -304,6 +341,20 @@ function SettingsPage() {
     }
   };
 
+  const restoreCloudSession = async () => {
+    setRestoringSession(true);
+    try {
+      const status = await desktop.restoreOidcSession();
+      setOidcSessionStatus(status);
+      toast.success("Native provider session restored securely");
+    } catch (error) {
+      setOidcSessionStatus(await desktop.getOidcSessionStatus());
+      toast.error(error instanceof Error ? error.message : "Unable to restore provider session");
+    } finally {
+      setRestoringSession(false);
+    }
+  };
+
   const cancelCloudSignIn = async () => {
     setCancellingCloudSignIn(true);
     try {
@@ -349,17 +400,29 @@ function SettingsPage() {
         : "Native secure storage unavailable";
   const authStatusDescription = authStatusError
     ? "Recorder settings remain available. Run the readiness check to retry secure storage."
-    : authStatus?.signedIn
+    : oidcSessionStatus?.refreshCredentialPresent || authStatus?.signedIn
       ? "A durable local cloud credential is stored securely."
       : "No durable cloud credential is stored on this device.";
   const sessionStatusTitle = oidcSessionStatus?.active
     ? "Provider identity verified"
     : oidcSessionStatus === null
       ? "Checking native session…"
-      : "No verified native session";
+      : oidcSessionStatus.legacyRefreshCredentialPresent
+        ? "Legacy credential requires sign-in"
+        : oidcSessionStatus.restorationFailed
+          ? "Provider session restoration failed"
+          : oidcSessionStatus.restorationRequired || restoringSession
+            ? "Restoring provider session"
+            : "No verified native session";
   const sessionStatusDescription = oidcSessionStatus?.active
-    ? `The access token is held only in native memory until ${formatSessionExpiry(oidcSessionStatus.expiresAt)}. ${oidcSessionStatus.refreshTokenPersisted ? "The refresh credential is stored in Windows Credential Manager." : "No durable refresh credential is stored."} Paid access has not been checked.`
-    : "A successful provider exchange and signed ID-token verification are required. No paid access is granted locally.";
+    ? `The access token is held only in native memory until ${formatSessionExpiry(oidcSessionStatus.expiresAt)}. ${oidcSessionStatus.refreshTokenPersisted ? "The subject-bound refresh credential is stored in Windows Credential Manager." : "No durable refresh credential is stored."} Paid access has not been checked.`
+    : oidcSessionStatus?.legacyRefreshCredentialPresent
+      ? "The previous raw credential cannot prove account continuity and will not be exchanged. Complete provider sign-in again to replace it safely."
+      : oidcSessionStatus?.restorationFailed
+        ? "The subject-bound credential remains stored, but bounded refresh or identity verification did not complete. Retry or clear the local session."
+        : oidcSessionStatus?.restorationRequired || restoringSession
+          ? "Recorder is performing a bounded native refresh, verifying the signed identity and rotating the credential before installing an access session."
+          : "A successful provider exchange and signed ID-token verification are required. No paid access is granted locally.";
   const oidcStatusTitle = oidcClientError
     ? "OIDC build configuration is invalid"
     : oidcClientStatus === null
@@ -385,7 +448,7 @@ function SettingsPage() {
         oidcExchangeStatus.identityValidationEnabled &&
         oidcExchangeStatus.strictResponseParser &&
         oidcExchangeStatus.boundedHttpsTransportSupported
-      ? `A ${oidcExchangeStatus.totalTimeoutSeconds}-second bounded HTTPS exchange, JWKS signature verification, strict identity validation, and transactional Windows refresh persistence are enabled. Rotation, startup restoration, and paid-access authorization remain pending.`
+      ? `A ${oidcExchangeStatus.totalTimeoutSeconds}-second bounded HTTPS exchange, JWKS signature verification, strict identity validation, subject-bound refresh rotation, and startup restoration are enabled. Paid-access authorization remains pending.`
       : "Native token exchange or signed identity validation is unavailable.";
   const callbackStatusText = describeCallbackStatus(oidcCallbackStatus, completingCloudSignIn);
   const canStartCloudSignIn =
@@ -397,6 +460,7 @@ function SettingsPage() {
     authStatus?.supported === true &&
     authStatus.signedIn === false &&
     oidcSessionStatus?.active !== true &&
+    oidcSessionStatus?.restorationRequired !== true &&
     !oidcCallbackStatus?.pending &&
     !completingCloudSignIn;
 
@@ -528,7 +592,9 @@ function SettingsPage() {
               access API.
             </p>
             <div className="flex flex-wrap justify-end gap-2">
-              {authStatus?.signedIn || oidcSessionStatus?.active ? (
+              {authStatus?.signedIn ||
+              oidcSessionStatus?.active ||
+              oidcSessionStatus?.refreshCredentialPresent ? (
                 <Button
                   type="button"
                   variant="outline"
@@ -537,6 +603,17 @@ function SettingsPage() {
                   onClick={clearCloudSession}
                 >
                   {clearingSession ? "Clearing…" : "Clear local session"}
+                </Button>
+              ) : null}
+              {oidcSessionStatus?.restorationRequired && !oidcSessionStatus.active ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={restoringSession}
+                  onClick={restoreCloudSession}
+                >
+                  {restoringSession ? "Restoring…" : "Retry session restore"}
                 </Button>
               ) : null}
               {oidcCallbackStatus?.pending ? (
