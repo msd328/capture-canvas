@@ -21,6 +21,8 @@ The complete envelope remains within the 2,560-byte Windows generic-credential l
 
 The prior v1 target stored only raw refresh-token bytes. Because it cannot prove which verified subject owns the credential, Recorder reports its non-secret presence but never sends it to the token endpoint. A new interactive sign-in replaces it with v2.
 
+A malformed v2 envelope is also never exchanged. Recorder reports only `refreshCredentialInvalid=true`, keeps the clear-local-session action available, and zeroes the temporary bytes after inspection.
+
 ## Refresh request boundary
 
 The refresh flow:
@@ -65,14 +67,14 @@ Startup launches one serialized native restoration attempt. A no-argument `resto
 Non-secret status now includes:
 
 - current or legacy refresh-credential presence;
-- legacy-v1 presence;
+- invalid-v2 and legacy-v1 presence;
 - whether restoration is required;
 - whether restoration was attempted or failed;
 - whether automatic restoration is enabled.
 
 ## Security impact
 
-- Data read: subject-bound v2 refresh credential; legacy-v1 presence and bounded bytes for zeroed inspection/cleanup.
+- Data read: subject-bound v2 refresh credential; invalid-v2 and legacy-v1 bounded bytes for zeroed inspection/cleanup.
 - Data written: rotated v2 subject-bound refresh credential.
 - Data deleted: legacy v1 credential on successful interactive persistence; v1 and v2 on explicit local clear.
 - Data returned to the WebView: booleans and native-session expiry only.
@@ -97,7 +99,7 @@ Non-secret status now includes:
 - forced timeout, malformed response, wrong key, bad signature and subject mismatch;
 - clear-during-refresh cancellation;
 - concurrent retry serialization;
-- legacy-v1 detection and interactive replacement;
+- legacy-v1 and malformed-v2 detection/cleanup;
 - proof that no secret or subject reaches logs or WebView serialization.
 
 ## Remaining work
