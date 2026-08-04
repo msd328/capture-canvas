@@ -2,7 +2,8 @@
 //!
 //! The v2 binary envelope binds the opaque refresh token to the UUID subject
 //! verified during sign-in. Writes are read back before success and roll back on
-//! mismatch. Raw v1 credentials are detected for cleanup but never auto-restored.
+//! mismatch. Raw v1 and malformed v2 credentials are detected for cleanup but are
+//! never auto-restored.
 
 use std::sync::atomic::{compiler_fence, Ordering};
 use uuid::Uuid;
@@ -10,7 +11,8 @@ use uuid::Uuid;
 const MAX_CREDENTIAL_BYTES: usize = 5 * 512;
 const MAGIC: &[u8] = b"RECORDER-OIDC-REFRESH\0\x02";
 const SUBJECT_BYTES: usize = 16;
-pub(crate) const MAX_REFRESH_TOKEN_BYTES: usize = MAX_CREDENTIAL_BYTES - MAGIC.len() - SUBJECT_BYTES;
+pub(crate) const MAX_REFRESH_TOKEN_BYTES: usize =
+    MAX_CREDENTIAL_BYTES - MAGIC.len() - SUBJECT_BYTES;
 const TARGET_V2: &str = "Recorder/app.recorder.desktop/saas-refresh-token/v2";
 const TARGET_V1: &str = "Recorder/app.recorder.desktop/saas-refresh-token/v1";
 
@@ -52,6 +54,8 @@ impl RefreshCredential {
 
 pub(crate) struct RefreshCredentialState {
     pub(crate) credential: Option<RefreshCredential>,
+    pub(crate) current_present: bool,
+    pub(crate) current_invalid: bool,
     pub(crate) legacy_present: bool,
 }
 
@@ -121,26 +125,29 @@ pub(crate) fn load_refresh_credential_state() -> Result<RefreshCredentialState, 
     {
         let legacy = windows_store::read(TARGET_V1)?.map(SecretBytes::new);
         let legacy_present = legacy.is_some();
-        let current = windows_store::read(TARGET_V2)?;
-        let credential = current
-            .map(SecretBytes::new)
-            .map(decode)
-            .transpose()
-            .map_err(|code| {
-                eprintln!(
-                    "[Recorder][AuthHealth] stage=oidc_refresh_load ok=false code={code} subject_bound=false version=2"
-                );
-                "Stored OIDC refresh credential is invalid".to_string()
-            })?;
+        let current = windows_store::read(TARGET_V2)?.map(SecretBytes::new);
+        let current_present = current.is_some();
+        let (credential, current_invalid) = match current {
+            Some(value) => match decode(value) {
+                Ok(credential) => (Some(credential), false),
+                Err(code) => {
+                    eprintln!(
+                        "[Recorder][AuthHealth] stage=oidc_refresh_load ok=false code={code} current_present=true subject_bound=false version=2 cleanup_available=true"
+                    );
+                    (None, true)
+                }
+            },
+            None => (None, false),
+        };
         drop(legacy);
         eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_refresh_load ok=true current_present={} legacy_present={} subject_bound={}",
-            credential.is_some(),
-            legacy_present,
+            "[Recorder][AuthHealth] stage=oidc_refresh_load ok=true current_present={current_present} current_invalid={current_invalid} legacy_present={legacy_present} subject_bound={}",
             credential.is_some()
         );
         Ok(RefreshCredentialState {
             credential,
+            current_present,
+            current_invalid,
             legacy_present,
         })
     }
@@ -149,6 +156,8 @@ pub(crate) fn load_refresh_credential_state() -> Result<RefreshCredentialState, 
     {
         Ok(RefreshCredentialState {
             credential: None,
+            current_present: false,
+            current_invalid: false,
             legacy_present: false,
         })
     }
@@ -206,8 +215,8 @@ fn decode(value: SecretBytes) -> Result<RefreshCredential, &'static str> {
     {
         return Err("envelope_invalid");
     }
-    let subject = Uuid::from_slice(&bytes[subject_start..subject_end])
-        .map_err(|_| "subject_invalid")?;
+    let subject =
+        Uuid::from_slice(&bytes[subject_start..subject_end]).map_err(|_| "subject_invalid")?;
     validate_token(&bytes[subject_end..])?;
     let token = SecretBytes::new(bytes[subject_end..].to_vec());
     drop(value);
