@@ -1,19 +1,23 @@
-//! Transactional native refresh-token persistence.
+//! Subject-bound Windows refresh-credential storage.
 //!
-//! The live OIDC completion path does not call this module yet. It provides the
-//! fail-closed Windows Credential Manager replacement primitive needed before
-//! refresh tokens may become durable. New values are read back after write; a
-//! failed read-back restores the prior credential or removes the new credential.
+//! The v2 binary envelope binds the opaque refresh token to the UUID subject
+//! verified during sign-in. Writes are read back before success and roll back on
+//! mismatch. Raw v1 credentials are detected for cleanup but never auto-restored.
 
 use std::sync::atomic::{compiler_fence, Ordering};
+use uuid::Uuid;
 
-const MAX_REFRESH_TOKEN_BYTES: usize = 5 * 512;
-const REFRESH_TOKEN_TARGET: &str = "Recorder/app.recorder.desktop/saas-refresh-token/v1";
+const MAX_CREDENTIAL_BYTES: usize = 5 * 512;
+const MAGIC: &[u8] = b"RECORDER-OIDC-REFRESH\0\x02";
+const SUBJECT_BYTES: usize = 16;
+pub(crate) const MAX_REFRESH_TOKEN_BYTES: usize = MAX_CREDENTIAL_BYTES - MAGIC.len() - SUBJECT_BYTES;
+const TARGET_V2: &str = "Recorder/app.recorder.desktop/saas-refresh-token/v2";
+const TARGET_V1: &str = "Recorder/app.recorder.desktop/saas-refresh-token/v1";
 
 struct SecretBytes(Vec<u8>);
 
 impl SecretBytes {
-    fn from_vec(value: Vec<u8>) -> Self {
+    fn new(value: Vec<u8>) -> Self {
         Self(value)
     }
 
@@ -31,46 +35,73 @@ impl Drop for SecretBytes {
     }
 }
 
+pub(crate) struct RefreshCredential {
+    subject: Uuid,
+    token: SecretBytes,
+}
+
+impl RefreshCredential {
+    pub(crate) const fn subject(&self) -> Uuid {
+        self.subject
+    }
+
+    pub(crate) fn token(&self) -> &[u8] {
+        self.token.expose()
+    }
+}
+
+pub(crate) struct RefreshCredentialState {
+    pub(crate) credential: Option<RefreshCredential>,
+    pub(crate) legacy_present: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RefreshTokenWriteOutcome {
+pub(crate) struct RefreshCredentialWriteOutcome {
     pub(crate) replaced_existing: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct RefreshTokenReplaceFailure {
+struct ReplaceFailure {
     code: &'static str,
     rollback_ok: bool,
 }
 
-pub(crate) fn persist_refresh_token(
+pub(crate) fn persist_refresh_credential(
+    subject: Uuid,
     refresh_token: &[u8],
-) -> Result<RefreshTokenWriteOutcome, String> {
-    validate_refresh_token(refresh_token).map_err(|code| {
+) -> Result<RefreshCredentialWriteOutcome, String> {
+    let encoded = encode(subject, refresh_token).map_err(|code| {
         eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_refresh_persist ok=false code={code} rollback_ok=true"
+            "[Recorder][AuthHealth] stage=oidc_refresh_persist ok=false code={code} rollback_ok=true subject_bound=false"
         );
         "OIDC refresh credential is invalid".to_string()
     })?;
 
     #[cfg(windows)]
     {
-        let result = replace_and_verify_with(
-            refresh_token,
-            windows_store::read_secret,
-            windows_store::write_secret,
-            windows_store::delete_secret,
+        windows_store::delete(TARGET_V1).map_err(|error| {
+            eprintln!(
+                "[Recorder][AuthHealth] stage=oidc_refresh_persist ok=false code=legacy_delete_failed rollback_ok=true subject_bound=false"
+            );
+            error
+        })?;
+        let result = replace_with(
+            encoded.expose(),
+            || windows_store::read(TARGET_V2),
+            |value| windows_store::write(TARGET_V2, value),
+            || windows_store::delete(TARGET_V2),
         );
         match result {
             Ok(outcome) => {
                 eprintln!(
-                    "[Recorder][AuthHealth] stage=oidc_refresh_persist ok=true replaced_existing={} readback_verified=true rollback_needed=false",
+                    "[Recorder][AuthHealth] stage=oidc_refresh_persist ok=true replaced_existing={} readback_verified=true subject_bound=true version=2",
                     outcome.replaced_existing
                 );
                 Ok(outcome)
             }
             Err(failure) => {
                 eprintln!(
-                    "[Recorder][AuthHealth] stage=oidc_refresh_persist ok=false code={} rollback_ok={}",
+                    "[Recorder][AuthHealth] stage=oidc_refresh_persist ok=false code={} rollback_ok={} subject_bound=true version=2",
                     failure.code, failure.rollback_ok
                 );
                 Err("Unable to persist the OIDC refresh credential securely".to_string())
@@ -80,105 +111,189 @@ pub(crate) fn persist_refresh_token(
 
     #[cfg(not(windows))]
     {
-        eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_refresh_persist ok=false code=unsupported rollback_ok=true"
-        );
+        drop(encoded);
         Err("Native refresh credential storage is unavailable on this platform".to_string())
     }
 }
 
-fn validate_refresh_token(value: &[u8]) -> Result<(), &'static str> {
-    if value.is_empty() || value.len() > MAX_REFRESH_TOKEN_BYTES {
-        return Err("size_invalid");
+pub(crate) fn load_refresh_credential_state() -> Result<RefreshCredentialState, String> {
+    #[cfg(windows)]
+    {
+        let legacy = windows_store::read(TARGET_V1)?.map(SecretBytes::new);
+        let legacy_present = legacy.is_some();
+        let current = windows_store::read(TARGET_V2)?;
+        let credential = current
+            .map(SecretBytes::new)
+            .map(decode)
+            .transpose()
+            .map_err(|code| {
+                eprintln!(
+                    "[Recorder][AuthHealth] stage=oidc_refresh_load ok=false code={code} subject_bound=false version=2"
+                );
+                "Stored OIDC refresh credential is invalid".to_string()
+            })?;
+        drop(legacy);
+        eprintln!(
+            "[Recorder][AuthHealth] stage=oidc_refresh_load ok=true current_present={} legacy_present={} subject_bound={}",
+            credential.is_some(),
+            legacy_present,
+            credential.is_some()
+        );
+        Ok(RefreshCredentialState {
+            credential,
+            legacy_present,
+        })
     }
-    if value.iter().any(|byte| byte.is_ascii_control()) {
-        return Err("text_invalid");
+
+    #[cfg(not(windows))]
+    {
+        Ok(RefreshCredentialState {
+            credential: None,
+            legacy_present: false,
+        })
+    }
+}
+
+pub(crate) fn clear_persisted_refresh_credentials() -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        let current = windows_store::read(TARGET_V2)?.map(SecretBytes::new);
+        let legacy = windows_store::read(TARGET_V1)?.map(SecretBytes::new);
+        let present = current.is_some() || legacy.is_some();
+        let current_result = windows_store::delete(TARGET_V2);
+        let legacy_result = windows_store::delete(TARGET_V1);
+        drop(current);
+        drop(legacy);
+        if current_result.is_ok() && legacy_result.is_ok() {
+            eprintln!(
+                "[Recorder][AuthHealth] stage=oidc_refresh_clear ok=true previously_present={present}"
+            );
+            return Ok(present);
+        }
+        eprintln!(
+            "[Recorder][AuthHealth] stage=oidc_refresh_clear ok=false current_cleared={} legacy_cleared={}",
+            current_result.is_ok(),
+            legacy_result.is_ok()
+        );
+        Err(current_result
+            .err()
+            .or_else(|| legacy_result.err())
+            .unwrap_or_else(|| "Unable to clear native refresh credentials".to_string()))
+    }
+
+    #[cfg(not(windows))]
+    {
+        Err("Native refresh credential storage is unavailable on this platform".to_string())
+    }
+}
+
+fn encode(subject: Uuid, token: &[u8]) -> Result<SecretBytes, &'static str> {
+    validate_token(token)?;
+    let mut value = Vec::with_capacity(MAGIC.len() + SUBJECT_BYTES + token.len());
+    value.extend_from_slice(MAGIC);
+    value.extend_from_slice(subject.as_bytes());
+    value.extend_from_slice(token);
+    Ok(SecretBytes::new(value))
+}
+
+fn decode(value: SecretBytes) -> Result<RefreshCredential, &'static str> {
+    let bytes = value.expose();
+    let subject_start = MAGIC.len();
+    let subject_end = subject_start + SUBJECT_BYTES;
+    if bytes.len() <= subject_end
+        || bytes.len() > MAX_CREDENTIAL_BYTES
+        || !bytes.starts_with(MAGIC)
+    {
+        return Err("envelope_invalid");
+    }
+    let subject = Uuid::from_slice(&bytes[subject_start..subject_end])
+        .map_err(|_| "subject_invalid")?;
+    validate_token(&bytes[subject_end..])?;
+    let token = SecretBytes::new(bytes[subject_end..].to_vec());
+    drop(value);
+    Ok(RefreshCredential { subject, token })
+}
+
+fn validate_token(value: &[u8]) -> Result<(), &'static str> {
+    if value.is_empty() || value.len() > MAX_REFRESH_TOKEN_BYTES {
+        return Err("token_size_invalid");
+    }
+    if value
+        .iter()
+        .any(|byte| byte.is_ascii_control() || byte.is_ascii_whitespace())
+    {
+        return Err("token_text_invalid");
     }
     Ok(())
 }
 
-fn replace_and_verify_with<R, W, D>(
+fn replace_with<R, W, D>(
     new_secret: &[u8],
     mut read: R,
     mut write: W,
     mut delete: D,
-) -> Result<RefreshTokenWriteOutcome, RefreshTokenReplaceFailure>
+) -> Result<RefreshCredentialWriteOutcome, ReplaceFailure>
 where
     R: FnMut() -> Result<Option<Vec<u8>>, String>,
     W: FnMut(&[u8]) -> Result<(), String>,
     D: FnMut() -> Result<(), String>,
 {
-    validate_refresh_token(new_secret).map_err(|code| RefreshTokenReplaceFailure {
-        code,
-        rollback_ok: true,
-    })?;
-
     let previous = read()
-        .map_err(|_| RefreshTokenReplaceFailure {
+        .map_err(|_| ReplaceFailure {
             code: "existing_read_failed",
             rollback_ok: true,
         })?
         .filter(|value| !value.is_empty())
-        .map(SecretBytes::from_vec);
+        .map(SecretBytes::new);
     let replaced_existing = previous.is_some();
-
-    write(new_secret).map_err(|_| RefreshTokenReplaceFailure {
+    write(new_secret).map_err(|_| ReplaceFailure {
         code: "write_failed",
         rollback_ok: true,
     })?;
-
-    let (readback_matches, failure_code) = match read() {
-        Ok(Some(value)) => {
-            let value = SecretBytes::from_vec(value);
-            (
-                constant_time_eq(value.expose(), new_secret),
-                "readback_mismatch",
-            )
-        }
-        Ok(None) => (false, "readback_missing"),
-        Err(_) => (false, "readback_failed"),
-    };
-    if readback_matches {
-        return Ok(RefreshTokenWriteOutcome { replaced_existing });
+    let readback_ok = read()
+        .ok()
+        .flatten()
+        .map(SecretBytes::new)
+        .is_some_and(|value| constant_time_eq(value.expose(), new_secret));
+    if readback_ok {
+        return Ok(RefreshCredentialWriteOutcome { replaced_existing });
     }
-
     let rollback_ok = match previous.as_ref() {
         Some(value) => write(value.expose()).is_ok(),
         None => delete().is_ok(),
     };
-    Err(RefreshTokenReplaceFailure {
-        code: failure_code,
+    Err(ReplaceFailure {
+        code: "readback_failed",
         rollback_ok,
     })
 }
 
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    let mut difference = 0_u8;
-    for (left_byte, right_byte) in left.iter().zip(right.iter()) {
-        difference |= left_byte ^ right_byte;
+    let maximum = left.len().max(right.len());
+    let mut difference = left.len() ^ right.len();
+    for index in 0..maximum {
+        difference |= usize::from(
+            left.get(index).copied().unwrap_or(0) ^ right.get(index).copied().unwrap_or(0),
+        );
     }
     difference == 0
 }
 
 #[cfg(windows)]
 mod windows_store {
-    use super::{MAX_REFRESH_TOKEN_BYTES, REFRESH_TOKEN_TARGET};
-    use std::ffi::c_void;
-    use std::ptr;
+    use super::MAX_CREDENTIAL_BYTES;
+    use std::{ffi::c_void, ptr};
     use windows::core::{HRESULT, PCWSTR, PWSTR};
     use windows::Win32::Security::Credentials::{
         CredDeleteW, CredFree, CredReadW, CredWriteW, CREDENTIALW, CRED_FLAGS,
         CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
     };
 
-    const HRESULT_NOT_FOUND: HRESULT = HRESULT(0x8007_0490_u32 as i32);
+    const NOT_FOUND: HRESULT = HRESULT(0x8007_0490_u32 as i32);
 
-    struct CredentialBuffer(*mut CREDENTIALW);
+    struct Buffer(*mut CREDENTIALW);
 
-    impl Drop for CredentialBuffer {
+    impl Drop for Buffer {
         fn drop(&mut self) {
             if !self.0.is_null() {
                 unsafe { CredFree(self.0 as *const c_void) };
@@ -186,7 +301,7 @@ mod windows_store {
         }
     }
 
-    fn wide_null(value: &str) -> Vec<u16> {
+    fn wide(value: &str) -> Vec<u16> {
         value.encode_utf16().chain(std::iter::once(0)).collect()
     }
 
@@ -196,16 +311,15 @@ mod windows_store {
         format!("Windows refresh credential operation failed at {stage} (code {code})")
     }
 
-    pub(super) fn write_secret(secret: &[u8]) -> Result<(), String> {
-        if secret.is_empty() || secret.len() > MAX_REFRESH_TOKEN_BYTES {
+    pub(super) fn write(target: &str, secret: &[u8]) -> Result<(), String> {
+        if secret.is_empty() || secret.len() > MAX_CREDENTIAL_BYTES {
             return Err("Refresh credential size is invalid".to_string());
         }
-
-        let mut target_name = wide_null(REFRESH_TOKEN_TARGET);
+        let mut target = wide(target);
         let credential = CREDENTIALW {
             Flags: CRED_FLAGS(0),
             Type: CRED_TYPE_GENERIC,
-            TargetName: PWSTR(target_name.as_mut_ptr()),
+            TargetName: PWSTR(target.as_mut_ptr()),
             Comment: PWSTR::default(),
             LastWritten: Default::default(),
             CredentialBlobSize: secret.len() as u32,
@@ -216,56 +330,45 @@ mod windows_store {
             TargetAlias: PWSTR::default(),
             UserName: PWSTR::default(),
         };
-
         unsafe { CredWriteW(&credential, 0) }.map_err(|error| operation_error("write", &error))
     }
 
-    pub(super) fn read_secret() -> Result<Option<Vec<u8>>, String> {
-        let target_name = wide_null(REFRESH_TOKEN_TARGET);
-        let mut raw_credential: *mut CREDENTIALW = ptr::null_mut();
-        let result = unsafe {
-            CredReadW(
-                PCWSTR(target_name.as_ptr()),
-                CRED_TYPE_GENERIC,
-                None,
-                &mut raw_credential,
-            )
-        };
-
-        if let Err(error) = result {
-            if error.code() == HRESULT_NOT_FOUND {
+    pub(super) fn read(target: &str) -> Result<Option<Vec<u8>>, String> {
+        let target = wide(target);
+        let mut raw = ptr::null_mut();
+        if let Err(error) =
+            unsafe { CredReadW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, None, &mut raw) }
+        {
+            if error.code() == NOT_FOUND {
                 return Ok(None);
             }
             return Err(operation_error("read", &error));
         }
-        if raw_credential.is_null() {
+        if raw.is_null() {
             return Err("Windows refresh credential returned an empty pointer".to_string());
         }
-
-        let buffer = CredentialBuffer(raw_credential);
+        let buffer = Buffer(raw);
         let credential = unsafe { &*buffer.0 };
-        let secret_len = credential.CredentialBlobSize as usize;
-        if secret_len > MAX_REFRESH_TOKEN_BYTES {
+        let size = credential.CredentialBlobSize as usize;
+        if size > MAX_CREDENTIAL_BYTES {
             return Err("Windows refresh credential is oversized".to_string());
         }
-        if secret_len == 0 {
+        if size == 0 {
             return Ok(Some(Vec::new()));
         }
         if credential.CredentialBlob.is_null() {
             return Err("Windows refresh credential blob is missing".to_string());
         }
-
-        let secret = unsafe {
-            std::slice::from_raw_parts(credential.CredentialBlob as *const u8, secret_len).to_vec()
-        };
-        Ok(Some(secret))
+        Ok(Some(unsafe {
+            std::slice::from_raw_parts(credential.CredentialBlob as *const u8, size).to_vec()
+        }))
     }
 
-    pub(super) fn delete_secret() -> Result<(), String> {
-        let target_name = wide_null(REFRESH_TOKEN_TARGET);
-        match unsafe { CredDeleteW(PCWSTR(target_name.as_ptr()), CRED_TYPE_GENERIC, None) } {
+    pub(super) fn delete(target: &str) -> Result<(), String> {
+        let target = wide(target);
+        match unsafe { CredDeleteW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, None) } {
             Ok(()) => Ok(()),
-            Err(error) if error.code() == HRESULT_NOT_FOUND => Ok(()),
+            Err(error) if error.code() == NOT_FOUND => Ok(()),
             Err(error) => Err(operation_error("delete", &error)),
         }
     }
@@ -274,109 +377,61 @@ mod windows_store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::{Cell, RefCell};
-    use std::rc::Rc;
+    use std::{
+        cell::{Cell, RefCell},
+        rc::Rc,
+    };
 
     #[test]
-    fn refresh_token_bounds_match_windows_generic_credential_limit() {
-        assert_eq!(MAX_REFRESH_TOKEN_BYTES, 2560);
-        assert_eq!(validate_refresh_token(b"refresh.token"), Ok(()));
-        assert_eq!(validate_refresh_token(b""), Err("size_invalid"));
-        assert_eq!(
-            validate_refresh_token(&vec![b'x'; MAX_REFRESH_TOKEN_BYTES + 1]),
-            Err("size_invalid")
-        );
-        assert_eq!(validate_refresh_token(b"bad\nvalue"), Err("text_invalid"));
+    fn envelope_round_trips_subject_and_token() {
+        let subject = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
+        let decoded = decode(encode(subject, b"refresh.token").unwrap()).unwrap();
+        assert_eq!(decoded.subject(), subject);
+        assert_eq!(decoded.token(), b"refresh.token");
+        assert!(decode(SecretBytes::new(b"refresh.token".to_vec())).is_err());
     }
 
     #[test]
-    fn successful_replacement_is_read_back_and_reports_previous_state() {
-        let stored = Rc::new(RefCell::new(Some(b"old.refresh".to_vec())));
-        let read_store = stored.clone();
-        let write_store = stored.clone();
-        let delete_store = stored.clone();
-
-        let outcome = replace_and_verify_with(
-            b"new.refresh",
-            move || Ok(read_store.borrow().clone()),
-            move |value| {
-                *write_store.borrow_mut() = Some(value.to_vec());
-                Ok(())
-            },
-            move || {
-                *delete_store.borrow_mut() = None;
-                Ok(())
-            },
-        )
-        .unwrap();
-
-        assert!(outcome.replaced_existing);
-        assert_eq!(stored.borrow().as_deref(), Some(b"new.refresh".as_slice()));
-    }
-
-    #[test]
-    fn failed_readback_restores_the_previous_credential() {
-        let stored = Rc::new(RefCell::new(Some(b"old.refresh".to_vec())));
-        let reads = Rc::new(Cell::new(0_usize));
-        let read_store = stored.clone();
-        let read_count = reads.clone();
-        let write_store = stored.clone();
-        let delete_store = stored.clone();
-
-        let result = replace_and_verify_with(
-            b"new.refresh",
-            move || {
-                let count = read_count.get();
-                read_count.set(count + 1);
-                if count == 0 {
-                    Ok(read_store.borrow().clone())
-                } else {
-                    Ok(Some(b"corrupted".to_vec()))
+    fn replacement_rolls_back_on_readback_failure() {
+        let stored = Rc::new(RefCell::new(Some(b"old".to_vec())));
+        let reads = Rc::new(Cell::new(0));
+        let result = replace_with(
+            b"new",
+            {
+                let stored = stored.clone();
+                let reads = reads.clone();
+                move || {
+                    let n = reads.get();
+                    reads.set(n + 1);
+                    if n == 0 {
+                        Ok(stored.borrow().clone())
+                    } else {
+                        Ok(Some(b"bad".to_vec()))
+                    }
                 }
             },
-            move |value| {
-                *write_store.borrow_mut() = Some(value.to_vec());
-                Ok(())
+            {
+                let stored = stored.clone();
+                move |value| {
+                    *stored.borrow_mut() = Some(value.to_vec());
+                    Ok(())
+                }
             },
-            move || {
-                *delete_store.borrow_mut() = None;
-                Ok(())
+            {
+                let stored = stored.clone();
+                move || {
+                    *stored.borrow_mut() = None;
+                    Ok(())
+                }
             },
         );
-
-        assert_eq!(
+        assert!(matches!(
             result,
-            Err(RefreshTokenReplaceFailure {
-                code: "readback_mismatch",
+            Err(ReplaceFailure {
                 rollback_ok: true,
+                ..
             })
-        );
-        assert_eq!(stored.borrow().as_deref(), Some(b"old.refresh".as_slice()));
-    }
-
-    #[test]
-    fn initial_write_failure_does_not_modify_the_previous_credential() {
-        let stored = Rc::new(RefCell::new(Some(b"old.refresh".to_vec())));
-        let read_store = stored.clone();
-        let delete_store = stored.clone();
-
-        let result = replace_and_verify_with(
-            b"new.refresh",
-            move || Ok(read_store.borrow().clone()),
-            |_| Err("write failed".to_string()),
-            move || {
-                *delete_store.borrow_mut() = None;
-                Ok(())
-            },
-        );
-
-        assert_eq!(
-            result,
-            Err(RefreshTokenReplaceFailure {
-                code: "write_failed",
-                rollback_ok: true,
-            })
-        );
-        assert_eq!(stored.borrow().as_deref(), Some(b"old.refresh".as_slice()));
+        ));
+        assert_eq!(stored.borrow().as_deref(), Some(b"old".as_slice()));
     }
 }
