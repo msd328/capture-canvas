@@ -1,36 +1,18 @@
-//! Persisted refresh-credential reconciliation for native OIDC sessions.
+//! Persisted refresh-credential reconciliation and startup restoration.
 //!
-//! A durable refresh credential is not itself an authenticated session. This module
-//! inspects only Recorder's dedicated Windows Credential Manager target and publishes
-//! non-secret restart state. Automatic network refresh remains a separate boundary.
+//! Only a subject-bound v2 credential may enter the refresh flow. Restoration is
+//! serialized, cancellation-generation protected, and never treats durable storage
+//! alone as authentication. Legacy raw credentials remain visible for cleanup but
+//! are not exchanged automatically.
 
-use crate::oidc_session::{self, NativeOidcSessionStatus};
+use crate::{
+    oidc_refresh,
+    oidc_session::{self, NativeOidcSessionStatus},
+};
+use parking_lot::Mutex;
 use serde::Serialize;
-use std::sync::atomic::{compiler_fence, Ordering};
-
-const MAX_REFRESH_TOKEN_BYTES: usize = 5 * 512;
-const REFRESH_TOKEN_TARGET: &str = "Recorder/app.recorder.desktop/saas-refresh-token/v1";
-
-struct SecretBytes(Vec<u8>);
-
-impl SecretBytes {
-    fn new(value: Vec<u8>) -> Self {
-        Self(value)
-    }
-
-    fn expose(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-impl Drop for SecretBytes {
-    fn drop(&mut self) {
-        for byte in &mut self.0 {
-            unsafe { std::ptr::write_volatile(byte, 0) };
-        }
-        compiler_fence(Ordering::SeqCst);
-    }
-}
+use std::sync::OnceLock;
+use tokio::sync::Mutex as AsyncMutex;
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -41,66 +23,110 @@ pub struct NativeOidcSessionOverview {
     pub refresh_token_persisted: bool,
     pub reconciliation_complete: bool,
     pub refresh_credential_present: bool,
+    pub legacy_refresh_credential_present: bool,
     pub restoration_required: bool,
+    pub restoration_attempted: bool,
+    pub restoration_failed: bool,
+    pub automatic_restoration_enabled: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct RefreshCredentialInspection {
-    present: bool,
-    usable: bool,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct RestorationState {
+    attempted: bool,
+    failed: bool,
+}
+
+fn restoration_state() -> &'static Mutex<RestorationState> {
+    static STATE: OnceLock<Mutex<RestorationState>> = OnceLock::new();
+    STATE.get_or_init(|| Mutex::new(RestorationState::default()))
+}
+
+fn restoration_lock() -> &'static AsyncMutex<()> {
+    static LOCK: OnceLock<AsyncMutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| AsyncMutex::new(()))
 }
 
 pub(crate) fn reconcile_and_status() -> Result<NativeOidcSessionOverview, String> {
     let session = oidc_session::status();
-    let inspection = inspect_persisted_refresh_credential()?;
-    let restoration_required = !session.active && inspection.present && inspection.usable;
-    let overview = overview(session, inspection, restoration_required);
+    let stored = oidc_refresh::load_refresh_credential_state()?;
+    let state = *restoration_state().lock();
+    let overview = overview(
+        session,
+        stored.credential.is_some(),
+        stored.legacy_present,
+        state,
+    );
     eprintln!(
-        "[Recorder][AuthHealth] stage=oidc_startup_reconcile ok=true active={} refresh_present={} refresh_usable={} restoration_required={} automatic_refresh=false paid_access_granted=false",
+        "[Recorder][AuthHealth] stage=oidc_startup_reconcile ok=true active={} refresh_present={} legacy_present={} restoration_required={} restoration_attempted={} restoration_failed={} automatic_refresh=true paid_access_granted=false",
         overview.active,
         overview.refresh_credential_present,
-        inspection.usable,
-        overview.restoration_required
+        overview.legacy_refresh_credential_present,
+        overview.restoration_required,
+        overview.restoration_attempted,
+        overview.restoration_failed
     );
     Ok(overview)
 }
 
-pub(crate) fn reconcile_async() {
-    let _ = std::thread::Builder::new()
-        .name("recorder-oidc-reconcile".to_string())
-        .spawn(|| {
-            if let Err(error) = reconcile_and_status() {
-                eprintln!(
-                    "[Recorder][AuthHealth] stage=oidc_startup_reconcile ok=false code=credential_read_failed automatic_refresh=false"
-                );
-                drop(error);
-            }
-        });
+pub(crate) async fn restore_persisted_session() -> Result<NativeOidcSessionOverview, String> {
+    let _guard = restoration_lock().lock().await;
+    if oidc_session::status().active {
+        return reconcile_and_status();
+    }
+
+    let expected_generation = oidc_session::generation_snapshot();
+    let stored = oidc_refresh::load_refresh_credential_state()?;
+    let Some(credential) = stored.credential else {
+        return reconcile_and_status();
+    };
+
+    {
+        let mut state = restoration_state().lock();
+        state.attempted = true;
+        state.failed = false;
+    }
+    eprintln!(
+        "[Recorder][AuthHealth] stage=oidc_startup_restore_start ok=true subject_bound=true legacy_credential=false webview_token_input=false paid_access_granted=false"
+    );
+
+    match oidc_session::restore_verified_session(expected_generation, &credential).await {
+        Ok(_) => {
+            restoration_state().lock().failed = false;
+            eprintln!(
+                "[Recorder][AuthHealth] stage=oidc_startup_restore ok=true active=true refresh_rotated=true subject_continuity=true paid_access_granted=false"
+            );
+            reconcile_and_status()
+        }
+        Err(error) => {
+            restoration_state().lock().failed = true;
+            eprintln!(
+                "[Recorder][AuthHealth] stage=oidc_startup_restore ok=false active=false refresh_rotated=false paid_access_granted=false"
+            );
+            Err(error)
+        }
+    }
 }
 
-pub(crate) fn clear_persisted_refresh_credential() -> Result<bool, String> {
-    #[cfg(windows)]
-    {
-        let previous = windows_store::read_secret()?.map(SecretBytes::new);
-        let present = previous.is_some();
-        windows_store::delete_secret()?;
-        eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_refresh_clear ok=true previously_present={present}"
-        );
-        Ok(present)
-    }
+pub(crate) fn restore_async() {
+    tauri::async_runtime::spawn(async {
+        if let Err(error) = restore_persisted_session().await {
+            eprintln!(
+                "[Recorder][AuthHealth] stage=oidc_startup_restore_background ok=false code=restore_failed"
+            );
+            drop(error);
+        }
+    });
+}
 
-    #[cfg(not(windows))]
-    {
-        eprintln!("[Recorder][AuthHealth] stage=oidc_refresh_clear ok=false code=unsupported");
-        Err("Native refresh credential storage is unavailable on this platform".to_string())
-    }
+pub(crate) fn reset_restoration_state() {
+    *restoration_state().lock() = RestorationState::default();
 }
 
 fn overview(
     session: NativeOidcSessionStatus,
-    inspection: RefreshCredentialInspection,
-    restoration_required: bool,
+    current_present: bool,
+    legacy_present: bool,
+    restoration: RestorationState,
 ) -> NativeOidcSessionOverview {
     NativeOidcSessionOverview {
         active: session.active,
@@ -108,119 +134,12 @@ fn overview(
         access_token_native_only: session.access_token_native_only,
         refresh_token_persisted: session.refresh_token_persisted,
         reconciliation_complete: true,
-        refresh_credential_present: inspection.present,
-        restoration_required,
-    }
-}
-
-fn validate_refresh_token(value: &[u8]) -> bool {
-    !value.is_empty()
-        && value.len() <= MAX_REFRESH_TOKEN_BYTES
-        && !value.iter().any(|byte| byte.is_ascii_control())
-}
-
-fn inspect_persisted_refresh_credential() -> Result<RefreshCredentialInspection, String> {
-    #[cfg(windows)]
-    {
-        let secret = windows_store::read_secret()?.map(SecretBytes::new);
-        Ok(match secret.as_ref() {
-            Some(secret) => RefreshCredentialInspection {
-                present: true,
-                usable: validate_refresh_token(secret.expose()),
-            },
-            None => RefreshCredentialInspection {
-                present: false,
-                usable: false,
-            },
-        })
-    }
-
-    #[cfg(not(windows))]
-    {
-        Ok(RefreshCredentialInspection {
-            present: false,
-            usable: false,
-        })
-    }
-}
-
-#[cfg(windows)]
-mod windows_store {
-    use super::{MAX_REFRESH_TOKEN_BYTES, REFRESH_TOKEN_TARGET};
-    use std::ffi::c_void;
-    use std::ptr;
-    use windows::core::{HRESULT, PCWSTR};
-    use windows::Win32::Security::Credentials::{
-        CredDeleteW, CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC,
-    };
-
-    const HRESULT_NOT_FOUND: HRESULT = HRESULT(0x8007_0490_u32 as i32);
-
-    struct CredentialBuffer(*mut CREDENTIALW);
-
-    impl Drop for CredentialBuffer {
-        fn drop(&mut self) {
-            if !self.0.is_null() {
-                unsafe { CredFree(self.0 as *const c_void) };
-            }
-        }
-    }
-
-    fn wide_null(value: &str) -> Vec<u16> {
-        value.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-
-    fn operation_error(stage: &str, error: &windows::core::Error) -> String {
-        let code = error.code().0;
-        eprintln!("[Recorder][AuthHealth] stage=oidc_reconcile_store_{stage} ok=false code={code}");
-        format!("Windows refresh credential operation failed at {stage} (code {code})")
-    }
-
-    pub(super) fn read_secret() -> Result<Option<Vec<u8>>, String> {
-        let target_name = wide_null(REFRESH_TOKEN_TARGET);
-        let mut raw_credential: *mut CREDENTIALW = ptr::null_mut();
-        let result = unsafe {
-            CredReadW(
-                PCWSTR(target_name.as_ptr()),
-                CRED_TYPE_GENERIC,
-                None,
-                &mut raw_credential,
-            )
-        };
-        if let Err(error) = result {
-            if error.code() == HRESULT_NOT_FOUND {
-                return Ok(None);
-            }
-            return Err(operation_error("read", &error));
-        }
-        if raw_credential.is_null() {
-            return Err("Windows refresh credential returned an empty pointer".to_string());
-        }
-
-        let buffer = CredentialBuffer(raw_credential);
-        let credential = unsafe { &*buffer.0 };
-        let secret_len = credential.CredentialBlobSize as usize;
-        if secret_len > MAX_REFRESH_TOKEN_BYTES {
-            return Err("Windows refresh credential is oversized".to_string());
-        }
-        if secret_len == 0 {
-            return Ok(Some(Vec::new()));
-        }
-        if credential.CredentialBlob.is_null() {
-            return Err("Windows refresh credential blob is missing".to_string());
-        }
-        Ok(Some(unsafe {
-            std::slice::from_raw_parts(credential.CredentialBlob as *const u8, secret_len).to_vec()
-        }))
-    }
-
-    pub(super) fn delete_secret() -> Result<(), String> {
-        let target_name = wide_null(REFRESH_TOKEN_TARGET);
-        match unsafe { CredDeleteW(PCWSTR(target_name.as_ptr()), CRED_TYPE_GENERIC, None) } {
-            Ok(()) => Ok(()),
-            Err(error) if error.code() == HRESULT_NOT_FOUND => Ok(()),
-            Err(error) => Err(operation_error("delete", &error)),
-        }
+        refresh_credential_present: current_present || legacy_present,
+        legacy_refresh_credential_present: legacy_present,
+        restoration_required: !session.active && current_present,
+        restoration_attempted: restoration.attempted,
+        restoration_failed: restoration.failed,
+        automatic_restoration_enabled: true,
     }
 }
 
@@ -238,29 +157,46 @@ mod tests {
     }
 
     #[test]
-    fn persisted_refresh_requires_restoration_but_does_not_create_session() {
+    fn subject_bound_refresh_requires_restoration_but_is_not_a_session() {
         let status = overview(
             inactive_session(),
-            RefreshCredentialInspection {
-                present: true,
-                usable: true,
-            },
             true,
+            false,
+            RestorationState::default(),
         );
         assert!(!status.active);
         assert!(status.refresh_credential_present);
         assert!(status.restoration_required);
-        assert!(status.reconciliation_complete);
+        assert!(status.automatic_restoration_enabled);
     }
 
     #[test]
-    fn malformed_or_missing_refresh_does_not_claim_restorable_session() {
-        assert!(validate_refresh_token(b"valid.refresh"));
-        assert!(!validate_refresh_token(b""));
-        assert!(!validate_refresh_token(b"bad\nrefresh"));
-        assert!(!validate_refresh_token(&vec![
-            b'x';
-            MAX_REFRESH_TOKEN_BYTES + 1
-        ]));
+    fn legacy_raw_refresh_is_visible_but_never_restorable() {
+        let status = overview(
+            inactive_session(),
+            false,
+            true,
+            RestorationState::default(),
+        );
+        assert!(status.refresh_credential_present);
+        assert!(status.legacy_refresh_credential_present);
+        assert!(!status.restoration_required);
+    }
+
+    #[test]
+    fn failed_restore_is_non_secret_status_only() {
+        let status = overview(
+            inactive_session(),
+            true,
+            false,
+            RestorationState {
+                attempted: true,
+                failed: true,
+            },
+        );
+        assert!(status.restoration_attempted);
+        assert!(status.restoration_failed);
+        let serialized = serde_json::to_string(&status).unwrap();
+        assert!(!serialized.contains("refresh.token"));
     }
 }
