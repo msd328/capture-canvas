@@ -1,13 +1,13 @@
 //! Verified native OIDC access-session boundary.
 //!
-//! A session may be installed only after the bounded authorization-code exchange
-//! and RS256/ES256 ID-token verification both succeed. Access-token bytes remain
-//! native-only and in memory. The validated refresh token is persisted through a
-//! transactional Windows Credential Manager replacement before completion returns.
-//! Rotation, restoration, revocation and desktop entitlement enforcement remain
-//! deliberately separate follow-up boundaries.
+//! Initial authorization and persisted refresh restoration both build a completely
+//! verified session candidate before entering the commit boundary. The rotated,
+//! subject-bound refresh credential is written and read back while the session lock
+//! is held; only then is the native-only access session replaced.
 
-use crate::{auth::SecureAuthStore, oidc_exchange, oidc_refresh, oidc_verify};
+use crate::{
+    auth::SecureAuthStore, oidc_exchange, oidc_refresh, oidc_refresh_flow, oidc_verify,
+};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -77,21 +77,15 @@ fn runtime() -> &'static Mutex<SessionState> {
     SESSION.get_or_init(|| Mutex::new(SessionState::default()))
 }
 
-/// Exchange and verify the one-time callback grant, persist its refresh token, and
-/// install the native access session as one lock-protected commit.
-///
-/// The session candidate is completely validated before any credential write. The
-/// session lock is then held across the credential write/read-back and final
-/// assignment, so clear/logout cannot interleave and be undone by a late completion.
 pub(crate) async fn establish_verified_session(
     store: &SecureAuthStore,
 ) -> Result<NativeOidcSessionStatus, String> {
-    let expected_generation = generation();
+    let expected_generation = generation_snapshot();
     let exchange = oidc_exchange::exchange_authorization_code(store).await?;
     let identity =
         oidc_verify::verify_id_token(exchange.id_token(), exchange.expected_nonce()).await?;
     let now = Instant::now();
-    let mut candidate = prepare_session(
+    let candidate = prepare_session(
         identity.subject(),
         identity.expires_at(),
         exchange.access_token(),
@@ -99,38 +93,85 @@ pub(crate) async fn establish_verified_session(
         now,
         Utc::now(),
     )
-    .map_err(|code| {
-        eprintln!("[Recorder][AuthHealth] stage=oidc_session_prepare ok=false code={code}");
-        "OIDC access session could not be established".to_string()
-    })?;
+    .map_err(|code| session_prepare_error("oidc_session_prepare", code))?;
 
+    commit_session(
+        expected_generation,
+        candidate,
+        identity.subject(),
+        exchange.refresh_token(),
+        now,
+        "oidc_session_commit",
+    )
+}
+
+pub(crate) async fn restore_verified_session(
+    expected_generation: u64,
+    credential: &oidc_refresh::RefreshCredential,
+) -> Result<NativeOidcSessionStatus, String> {
+    let exchange = oidc_refresh_flow::exchange_and_verify(credential).await?;
+    let now = Instant::now();
+    let candidate = prepare_session(
+        exchange.subject(),
+        exchange.identity_expires_at(),
+        exchange.access_token(),
+        exchange.expires_in(),
+        now,
+        Utc::now(),
+    )
+    .map_err(|code| session_prepare_error("oidc_refresh_session_prepare", code))?;
+
+    commit_session(
+        expected_generation,
+        candidate,
+        exchange.subject(),
+        exchange.refresh_token(),
+        now,
+        "oidc_refresh_session_commit",
+    )
+}
+
+fn session_prepare_error(stage: &str, code: &str) -> String {
+    eprintln!("[Recorder][AuthHealth] stage={stage} ok=false code={code}");
+    "OIDC access session could not be established".to_string()
+}
+
+fn commit_session(
+    expected_generation: u64,
+    mut candidate: NativeAccessSession,
+    subject: Uuid,
+    refresh_token: &[u8],
+    now: Instant,
+    stage: &str,
+) -> Result<NativeOidcSessionStatus, String> {
     let mut state = runtime().lock();
     if state.generation != expected_generation {
         eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_session_commit ok=false code=session_cancelled refresh_write_attempted=false"
+            "[Recorder][AuthHealth] stage={stage} ok=false code=session_cancelled refresh_write_attempted=false"
         );
         return Err("OIDC access session was cancelled before commit".to_string());
     }
 
-    oidc_refresh::persist_refresh_token(exchange.refresh_token()).map_err(|error| {
+    oidc_refresh::persist_refresh_credential(subject, refresh_token).map_err(|error| {
         eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_session_commit ok=false code=refresh_persist_failed session_installed=false"
+            "[Recorder][AuthHealth] stage={stage} ok=false code=refresh_persist_failed session_installed=false"
         );
         error
     })?;
 
     candidate.refresh_token_persisted = true;
     state.active = Some(candidate);
+    state.generation = state.generation.wrapping_add(1);
     let status = status_from_state(&mut state, now);
     drop(state);
 
     eprintln!(
-        "[Recorder][AuthHealth] stage=oidc_session_commit ok=true active=true access_token_native_only=true refresh_token_persisted=true paid_access_granted=false"
+        "[Recorder][AuthHealth] stage={stage} ok=true active=true access_token_native_only=true refresh_token_persisted=true subject_bound=true paid_access_granted=false"
     );
     Ok(status)
 }
 
-fn generation() -> u64 {
+pub(crate) fn generation_snapshot() -> u64 {
     runtime().lock().generation
 }
 
@@ -165,9 +206,10 @@ fn prepare_session(
     })
 }
 
+#[cfg(test)]
 fn install_session(
     expected_generation: u64,
-    session: NativeAccessSession,
+    mut session: NativeAccessSession,
     refresh_token_persisted: bool,
     now: Instant,
 ) -> Result<NativeOidcSessionStatus, &'static str> {
@@ -175,9 +217,9 @@ fn install_session(
     if state.generation != expected_generation {
         return Err("session_cancelled");
     }
-    let mut session = session;
     session.refresh_token_persisted = refresh_token_persisted;
     state.active = Some(session);
+    state.generation = state.generation.wrapping_add(1);
     Ok(status_from_state(&mut state, now))
 }
 
@@ -273,7 +315,7 @@ mod tests {
         let now_utc = Utc::now();
         let subject = Uuid::parse_str("11111111-1111-4111-8111-111111111111").unwrap();
         let status = install_session(
-            generation(),
+            generation_snapshot(),
             candidate(subject, 120, 3600, now, now_utc).unwrap(),
             true,
             now,
@@ -298,6 +340,23 @@ mod tests {
         assert!(!serialized.contains("11111111-1111-4111-8111-111111111111"));
         assert!(!serialized.contains("header.payload.signature"));
         assert!(!status_at(now + Duration::from_secs(121)).active);
+    }
+
+    #[test]
+    fn successful_session_commit_invalidates_concurrent_candidates() {
+        let _guard = test_guard();
+        reset();
+        let expected_generation = generation_snapshot();
+        let now = Instant::now();
+        let now_utc = Utc::now();
+        let first = candidate(Uuid::new_v4(), 300, 300, now, now_utc).unwrap();
+        let second = candidate(Uuid::new_v4(), 300, 300, now, now_utc).unwrap();
+
+        install_session(expected_generation, first, true, now).unwrap();
+        assert!(matches!(
+            install_session(expected_generation, second, true, now),
+            Err("session_cancelled")
+        ));
     }
 
     #[test]
@@ -332,7 +391,7 @@ mod tests {
         let now = Instant::now();
         let now_utc = Utc::now();
         install_session(
-            generation(),
+            generation_snapshot(),
             candidate(Uuid::new_v4(), 300, 300, now, now_utc).unwrap(),
             true,
             now,
@@ -347,7 +406,7 @@ mod tests {
     fn clear_during_exchange_prevents_late_session_commit() {
         let _guard = test_guard();
         reset();
-        let expected_generation = generation();
+        let expected_generation = generation_snapshot();
         let now = Instant::now();
         let now_utc = Utc::now();
         let prepared = candidate(Uuid::new_v4(), 300, 300, now, now_utc).unwrap();
