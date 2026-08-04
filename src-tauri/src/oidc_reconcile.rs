@@ -6,11 +6,31 @@
 
 use crate::oidc_session::{self, NativeOidcSessionStatus};
 use serde::Serialize;
-use std::ffi::c_void;
-use std::ptr;
+use std::sync::atomic::{compiler_fence, Ordering};
 
 const MAX_REFRESH_TOKEN_BYTES: usize = 5 * 512;
 const REFRESH_TOKEN_TARGET: &str = "Recorder/app.recorder.desktop/saas-refresh-token/v1";
+
+struct SecretBytes(Vec<u8>);
+
+impl SecretBytes {
+    fn new(value: Vec<u8>) -> Self {
+        Self(value)
+    }
+
+    fn expose(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl Drop for SecretBytes {
+    fn drop(&mut self) {
+        for byte in &mut self.0 {
+            unsafe { std::ptr::write_volatile(byte, 0) };
+        }
+        compiler_fence(Ordering::SeqCst);
+    }
+}
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -61,7 +81,8 @@ pub(crate) fn reconcile_async() {
 pub(crate) fn clear_persisted_refresh_credential() -> Result<bool, String> {
     #[cfg(windows)]
     {
-        let present = windows_store::read_secret()?.is_some();
+        let previous = windows_store::read_secret()?.map(SecretBytes::new);
+        let present = previous.is_some();
         windows_store::delete_secret()?;
         eprintln!(
             "[Recorder][AuthHealth] stage=oidc_refresh_clear ok=true previously_present={present}"
@@ -103,11 +124,11 @@ fn validate_refresh_token(value: &[u8]) -> bool {
 fn inspect_persisted_refresh_credential() -> Result<RefreshCredentialInspection, String> {
     #[cfg(windows)]
     {
-        let secret = windows_store::read_secret()?;
-        Ok(match secret {
+        let secret = windows_store::read_secret()?.map(SecretBytes::new);
+        Ok(match secret.as_ref() {
             Some(secret) => RefreshCredentialInspection {
                 present: true,
-                usable: validate_refresh_token(&secret),
+                usable: validate_refresh_token(secret.expose()),
             },
             None => RefreshCredentialInspection {
                 present: false,
@@ -127,7 +148,9 @@ fn inspect_persisted_refresh_credential() -> Result<RefreshCredentialInspection,
 
 #[cfg(windows)]
 mod windows_store {
-    use super::{c_void, ptr, MAX_REFRESH_TOKEN_BYTES, REFRESH_TOKEN_TARGET};
+    use super::{MAX_REFRESH_TOKEN_BYTES, REFRESH_TOKEN_TARGET};
+    use std::ffi::c_void;
+    use std::ptr;
     use windows::core::{HRESULT, PCWSTR};
     use windows::Win32::Security::Credentials::{
         CredDeleteW, CredFree, CredReadW, CREDENTIALW, CRED_TYPE_GENERIC,
