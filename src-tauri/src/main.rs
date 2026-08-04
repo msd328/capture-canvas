@@ -22,6 +22,7 @@ mod oidc_refresh_flow;
 mod oidc_session;
 mod oidc_token;
 mod oidc_verify;
+mod paid_access_guard;
 mod saas_access;
 // The bounded WinRT wait macro assigns its timeout flag before returning an
 // explicit timeout outcome. Rust reports that macro-local assignment once per
