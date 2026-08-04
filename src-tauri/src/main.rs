@@ -22,6 +22,7 @@ mod oidc_refresh_flow;
 mod oidc_session;
 mod oidc_token;
 mod oidc_verify;
+mod saas_access;
 // The bounded WinRT wait macro assigns its timeout flag before returning an
 // explicit timeout outcome. Rust reports that macro-local assignment once per
 // expansion even though the outcome carries the correct timeout state. Keep the
@@ -68,6 +69,8 @@ fn main() {
             commands::auth::cancel_oidc_transaction,
             commands::auth::probe_oidc_transaction,
             commands::auth::probe_oidc_exchange_contract,
+            commands::access::get_account_access_status,
+            commands::access::refresh_account_access,
             commands::devices::list_displays,
             commands::devices::list_windows,
             commands::devices::list_microphones,
