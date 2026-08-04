@@ -11,6 +11,7 @@ import type {
   WindowInfo,
 } from "@/types/recorder";
 import type {
+  NativeAccountAccessStatus,
   NativeOidcSessionStatus,
   OidcCallbackStatus,
   OidcClientStatus,
@@ -75,6 +76,21 @@ const emptyOidcSession = async (): Promise<NativeOidcSessionStatus> => ({
   restorationAttempted: false,
   restorationFailed: false,
   automaticRestorationEnabled: false,
+});
+
+const emptyAccountAccess = async (): Promise<NativeAccountAccessStatus> => ({
+  configured: false,
+  endpointHttps: false,
+  loopbackDevelopment: false,
+  checked: false,
+  authenticated: false,
+  accountStatus: null,
+  subscription: null,
+  entitlementCount: 0,
+  fullAccess: false,
+  checkedAt: null,
+  validUntil: null,
+  accessTokenNativeOnly: true,
 });
 
 export const getSecureAuthStatus = () =>
@@ -159,6 +175,10 @@ export const probeOidcExchangeContract = () =>
     oversizedDeclaredResponseRejected: false,
     secretsKeptNative: false,
   }));
+export const getAccountAccessStatus = () =>
+  call<NativeAccountAccessStatus>("get_account_access_status", undefined, emptyAccountAccess);
+export const refreshAccountAccess = () =>
+  call<NativeAccountAccessStatus>("refresh_account_access", undefined, emptyAccountAccess);
 
 export const listDisplays = () =>
   call<DisplayInfo[]>("list_displays", undefined, () => mock.listDisplays());
