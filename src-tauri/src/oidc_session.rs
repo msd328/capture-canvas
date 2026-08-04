@@ -5,9 +5,7 @@
 //! subject-bound refresh credential is written and read back while the session lock
 //! is held; only then is the native-only access session replaced.
 
-use crate::{
-    auth::SecureAuthStore, oidc_exchange, oidc_refresh, oidc_refresh_flow, oidc_verify,
-};
+use crate::{auth::SecureAuthStore, oidc_exchange, oidc_refresh, oidc_refresh_flow, oidc_verify};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use serde::Serialize;

@@ -209,9 +209,7 @@ fn decode(value: SecretBytes) -> Result<RefreshCredential, &'static str> {
     let bytes = value.expose();
     let subject_start = MAGIC.len();
     let subject_end = subject_start + SUBJECT_BYTES;
-    if bytes.len() <= subject_end
-        || bytes.len() > MAX_CREDENTIAL_BYTES
-        || !bytes.starts_with(MAGIC)
+    if bytes.len() <= subject_end || bytes.len() > MAX_CREDENTIAL_BYTES || !bytes.starts_with(MAGIC)
     {
         return Err("envelope_invalid");
     }

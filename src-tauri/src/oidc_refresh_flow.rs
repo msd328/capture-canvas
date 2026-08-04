@@ -176,28 +176,24 @@ pub(crate) async fn exchange_and_verify(
 
     let response_bytes = SecretBytes::new(read_bounded(response).await?);
     let tokens = parse_response(response_bytes.expose()).map_err(|code| {
-        eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_refresh_response_parse ok=false code={code}"
-        );
+        eprintln!("[Recorder][AuthHealth] stage=oidc_refresh_response_parse ok=false code={code}");
         "OIDC refresh endpoint returned an invalid token response".to_string()
     })?;
 
     let key = resolve_id_token_key(tokens.id_token.expose()).await?;
     verify_signature(tokens.id_token.expose(), &key).map_err(|code| {
-        eprintln!(
-            "[Recorder][AuthHealth] stage=oidc_refresh_id_signature ok=false code={code}"
-        );
+        eprintln!("[Recorder][AuthHealth] stage=oidc_refresh_id_signature ok=false code={code}");
         "OIDC refreshed ID token signature is invalid".to_string()
     })?;
-    let (subject, identity_expires_at) =
-        validate_claims(tokens.id_token.expose(), config.issuer.as_str(), client_id).map_err(
-            |code| {
-                eprintln!(
-                    "[Recorder][AuthHealth] stage=oidc_refresh_id_claims ok=false code={code}"
-                );
-                "OIDC refreshed ID token claims are invalid".to_string()
-            },
-        )?;
+    let (subject, identity_expires_at) = validate_claims(
+        tokens.id_token.expose(),
+        config.issuer.as_str(),
+        client_id,
+    )
+    .map_err(|code| {
+        eprintln!("[Recorder][AuthHealth] stage=oidc_refresh_id_claims ok=false code={code}");
+        "OIDC refreshed ID token claims are invalid".to_string()
+    })?;
     if subject != credential.subject() {
         eprintln!(
             "[Recorder][AuthHealth] stage=oidc_refresh_subject_continuity ok=false code=subject_mismatch"
@@ -316,9 +312,10 @@ fn validate_headers(status: StatusCode, headers: &HeaderMap) -> Result<(), &'sta
         .to_str()
         .map_err(|_| "content_type_invalid")?;
     let mut parts = content_type.split(';');
-    if !parts.next().is_some_and(|value| {
-        value.trim().eq_ignore_ascii_case("application/json")
-    }) {
+    if !parts
+        .next()
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/json"))
+    {
         return Err("content_type_invalid");
     }
     if parts.any(|value| !value.trim().eq_ignore_ascii_case("charset=utf-8")) {
@@ -349,9 +346,7 @@ fn validate_headers(status: StatusCode, headers: &HeaderMap) -> Result<(), &'sta
         if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err("content_length_invalid");
         }
-        let declared = value
-            .parse::<u64>()
-            .map_err(|_| "content_length_invalid")?;
+        let declared = value.parse::<u64>().map_err(|_| "content_length_invalid")?;
         if declared > MAX_RESPONSE_BYTES as u64 {
             return Err("content_length_too_large");
         }
@@ -360,7 +355,10 @@ fn validate_headers(status: StatusCode, headers: &HeaderMap) -> Result<(), &'sta
 }
 
 async fn read_bounded(mut response: Response) -> Result<Vec<u8>, String> {
-    let capacity = response.content_length().unwrap_or(0).min(MAX_RESPONSE_BYTES as u64) as usize;
+    let capacity = response
+        .content_length()
+        .unwrap_or(0)
+        .min(MAX_RESPONSE_BYTES as u64) as usize;
     let mut bytes = Vec::with_capacity(capacity);
     while let Some(chunk) = response
         .chunk()
@@ -403,11 +401,9 @@ fn parse_response(bytes: &[u8]) -> Result<ParsedTokenResponse, &'static str> {
         return Err("response_size_invalid");
     }
     let mut deserializer = serde_json::Deserializer::from_slice(bytes);
-    let raw = RawTokenResponse::deserialize(&mut deserializer)
-        .map_err(|_| "response_json_invalid")?;
-    deserializer
-        .end()
-        .map_err(|_| "response_trailing_data")?;
+    let raw =
+        RawTokenResponse::deserialize(&mut deserializer).map_err(|_| "response_json_invalid")?;
+    deserializer.end().map_err(|_| "response_trailing_data")?;
 
     if !raw.token_type.eq_ignore_ascii_case("bearer") {
         return Err("token_type_invalid");
@@ -566,9 +562,7 @@ fn validate_claims(
     let payload = decode_payload(token)?;
     let mut deserializer = serde_json::Deserializer::from_slice(payload.expose());
     let raw = RawClaims::deserialize(&mut deserializer).map_err(|_| "claims_json_invalid")?;
-    deserializer
-        .end()
-        .map_err(|_| "claims_trailing_data")?;
+    deserializer.end().map_err(|_| "claims_trailing_data")?;
 
     validate_text(&raw.iss, 1, MAX_ISSUER_BYTES)?;
     if raw.iss != issuer {
@@ -619,9 +613,7 @@ fn validate_audience(
 ) -> Result<(), &'static str> {
     let values: Vec<&str> = match audience {
         RawAudience::Single(value) => vec![value],
-        RawAudience::Multiple(values)
-            if !values.is_empty() && values.len() <= MAX_AUDIENCES =>
-        {
+        RawAudience::Multiple(values) if !values.is_empty() && values.len() <= MAX_AUDIENCES => {
             values.iter().map(String::as_str).collect()
         }
         RawAudience::Multiple(_) => return Err("audience_count_invalid"),
@@ -694,10 +686,8 @@ mod tests {
 
     #[test]
     fn refresh_form_is_public_client_only() {
-        let body = String::from_utf8(
-            build_request(b"refresh.token", b"desktop-client").unwrap(),
-        )
-        .unwrap();
+        let body =
+            String::from_utf8(build_request(b"refresh.token", b"desktop-client").unwrap()).unwrap();
         assert_eq!(
             body,
             "grant_type=refresh_token&refresh_token=refresh.token&client_id=desktop-client"
